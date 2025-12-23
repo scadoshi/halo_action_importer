@@ -1,0 +1,11 @@
+requestId,actionDate,note,actionWho,CFactionId,shouldBeSkipped
+2997,,skip me,Scotty,123,TRUE
+2997,,skip me,Scotty,88,TRUE
+2997,,skip me,Scotty,336027,TRUE
+2997,,don't skip me,Excel,13788,FALSE
+2997,,don't skip me,Excel,38792,FALSE
+2997,,don't skip me,Excel,12342,FALSE
+2997,,don't skip me,Excel,57930,FALSE
+2997,,don't skip me,CSV,47382,FALSE
+2997,,don't skip me,CSV,22222,FALSE
+2997,,don't skip me,CSV,12348,FALSE
