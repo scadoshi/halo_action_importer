@@ -1,4 +1,6 @@
-use url::Url;
+use anyhow::Context;
+use reqwest::Url;
+use tracing::Level;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -8,6 +10,7 @@ pub struct Config {
     pub client_secret: String,
     pub action_ids_resource: Url,
     pub action_id_custom_field_id: u32,
+    pub log_level: Level,
 }
 
 const BASE_RESOURCE_URL_KEY: &str = "BASE_RESOURCE_URL";
@@ -18,19 +21,72 @@ const TOKEN_URL_PATH: &str = "auth/token";
 
 const ACTION_IDS_RESOURCE_PATH_KEY: &str = "ACTION_IDS_RESOURCE_PATH";
 const ACTION_ID_CUSTOM_FIELD_ID_KEY: &str = "ACTION_ID_CUSTOM_FIELD_ID";
+const LOG_LEVEL_KEY: &str = "LOG_LEVEL";
 
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
         dotenvy::dotenv().ok();
 
-        let base_resource_url = Url::try_from(std::env::var(BASE_RESOURCE_URL_KEY)?.as_str())?;
+        let base_url_str = std::env::var(BASE_RESOURCE_URL_KEY).with_context(|| {
+            format!(
+                "missing required environment variable: {}",
+                BASE_RESOURCE_URL_KEY
+            )
+        })?;
+        let base_resource_url = Url::try_from(base_url_str.as_str()).with_context(|| {
+            format!(
+                "invalid URL format for {}: {}",
+                BASE_RESOURCE_URL_KEY, base_url_str
+            )
+        })?;
         let mut token_url = base_resource_url.clone();
         token_url.set_path(TOKEN_URL_PATH);
-        let client_id = std::env::var(CLIENT_ID_KEY)?;
-        let client_secret = std::env::var(CLIENT_SECRET_KEY)?;
+        let client_id = std::env::var(CLIENT_ID_KEY)
+            .with_context(|| format!("missing required environment variable: {}", CLIENT_ID_KEY))?;
+        let client_secret = std::env::var(CLIENT_SECRET_KEY).with_context(|| {
+            format!(
+                "missing required environment variable: {}",
+                CLIENT_SECRET_KEY
+            )
+        })?;
+        let action_ids_path = std::env::var(ACTION_IDS_RESOURCE_PATH_KEY).with_context(|| {
+            format!(
+                "missing required environment variable: {}",
+                ACTION_IDS_RESOURCE_PATH_KEY
+            )
+        })?;
         let mut action_ids_resource = base_resource_url.clone();
-        action_ids_resource.set_path(std::env::var(ACTION_IDS_RESOURCE_PATH_KEY)?.as_str());
-        let action_id_custom_field_id = std::env::var(ACTION_ID_CUSTOM_FIELD_ID_KEY)?.parse()?;
+        action_ids_resource.set_path(action_ids_path.as_str());
+        let action_id_custom_field_id_str = std::env::var(ACTION_ID_CUSTOM_FIELD_ID_KEY)
+            .with_context(|| {
+                format!(
+                    "missing required environment variable: {}",
+                    ACTION_ID_CUSTOM_FIELD_ID_KEY
+                )
+            })?;
+        let action_id_custom_field_id =
+            action_id_custom_field_id_str.parse().with_context(|| {
+                format!(
+                    "invalid integer format for {}: {}",
+                    ACTION_ID_CUSTOM_FIELD_ID_KEY, action_id_custom_field_id_str
+                )
+            })?;
+
+        let log_level_str = std::env::var(LOG_LEVEL_KEY).unwrap_or_else(|_| "info".to_string());
+        let log_level = match log_level_str.to_lowercase().as_str() {
+            "trace" => Level::TRACE,
+            "debug" => Level::DEBUG,
+            "info" => Level::INFO,
+            "warn" => Level::WARN,
+            "error" => Level::ERROR,
+            _ => {
+                anyhow::bail!(
+                    "invalid log level '{}' for {}. must be one of: trace, debug, info, warn, error",
+                    log_level_str,
+                    LOG_LEVEL_KEY
+                );
+            }
+        };
 
         Ok(Self {
             base_resource_url,
@@ -39,6 +95,7 @@ impl Config {
             client_secret,
             action_ids_resource,
             action_id_custom_field_id,
+            log_level,
         })
     }
 }

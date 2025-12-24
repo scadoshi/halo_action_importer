@@ -1,17 +1,17 @@
 use crate::config::Config;
 use chrono::NaiveDateTime;
-use serde::{ser::SerializeSeq, Serialize};
+use serde::{Deserialize, Serialize, ser::SerializeSeq};
 
 #[derive(Debug, Clone)]
-pub struct ActionId(u32);
+pub struct ActionId(String);
 
 impl ActionId {
-    pub fn value(&self) -> u32 {
-        self.0
+    pub fn value(&self) -> &str {
+        &self.0
     }
 
-    pub fn new(id: u32) -> Self {
-        Self(id)
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
     }
 }
 
@@ -21,10 +21,10 @@ impl Serialize for ActionId {
         S: serde::Serializer,
     {
         let config = Config::from_env()
-            .map_err(|e| serde::ser::Error::custom(format!("env errr: {}", e)))?;
+            .map_err(|e| serde::ser::Error::custom(format!("env error: {}", e)))?;
         let object = serde_json::json!({
             "id": config.action_id_custom_field_id,
-            "value": self.value().to_string()
+            "value": self.value()
         });
         let mut seq = serializer.serialize_seq(Some(1))?;
         seq.serialize_element(&object)?;
@@ -32,16 +32,60 @@ impl Serialize for ActionId {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+impl<'de> Deserialize<'de> for ActionId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(Self(s))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionObject {
+    #[serde(
+        alias = "requestId",
+        alias = "requestID",
+        alias = "RequestId",
+        alias = "RequestID",
+        alias = "requestid",
+        alias = "REQUESTID"
+    )]
     ticket_id: u32,
+    #[serde(alias = "actionDate", alias = "ActionDate", alias = "ACTIONDATE")]
     actiondate: Option<NaiveDateTime>,
+    #[serde(default = "default_outcome")]
     outcome: String,
+    #[serde(alias = "Note", alias = "NOTE")]
     note: String,
+    #[serde(alias = "actionWho", alias = "ActionWho")]
     actionwho: String,
-    #[serde(rename = "customfields")]
+    #[serde(rename(serialize = "customfields"))]
+    #[serde(
+        alias = "cfactionid",
+        alias = "CFACTIONID",
+        alias = "CfActionId",
+        alias = "cfActionId",
+        alias = "CFactionId",
+        alias = "CFActionID",
+        alias = "CFactionId",
+        alias = "cfactionId",
+        alias = "cfActionID",
+        alias = "cfactionID",
+        alias = "cdactionId"
+    )]
     action_id: ActionId,
+    #[serde(default = "default_is_import")]
     _is_import: bool,
+}
+
+fn default_outcome() -> String {
+    "Imported Note".to_string()
+}
+
+fn default_is_import() -> bool {
+    true
 }
 
 impl ActionObject {
@@ -53,7 +97,7 @@ impl ActionObject {
         actionwho: impl Into<String>,
         action_id: ActionId,
     ) -> Self {
-        let outcome = outcome.unwrap_or("Imported Note".to_string());
+        let outcome = outcome.unwrap_or_else(|| default_outcome());
         Self {
             ticket_id,
             actiondate,
@@ -65,7 +109,7 @@ impl ActionObject {
         }
     }
 
-    pub fn action_id(&self) -> u32 {
+    pub fn action_id(&self) -> &str {
         self.action_id.value()
     }
 }
@@ -78,7 +122,7 @@ mod tests {
     fn serialize_action_object() {
         let config = Config::from_env().unwrap();
         let action_object =
-            ActionObject::new(123, None, None, "testing..", "tester", ActionId::new(456));
+            ActionObject::new(123, None, None, "testing..", "tester", ActionId::new("456"));
         let serialized: serde_json::Value = serde_json::to_value(&action_object).unwrap();
         assert_eq!(
             serialized,
