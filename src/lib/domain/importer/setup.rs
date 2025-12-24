@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tracing::info;
 use tracing_subscriber::{
     Registry, filter::LevelFilter, layer::SubscriberExt, util::SubscriberInitExt,
@@ -17,7 +18,7 @@ fn format_number(n: usize) -> String {
     let mut result = String::new();
     let chars: Vec<char> = s.chars().collect();
     for (i, &ch) in chars.iter().enumerate() {
-        if i > 0 && (chars.len() - i) % 3 == 0 {
+        if i > 0 && (chars.len() - i).is_multiple_of(3) {
             result.push(',');
         }
         result.push(ch);
@@ -31,6 +32,7 @@ pub struct SetupResult {
     pub existing_ids: HashSet<String>,
     pub action_client: Option<ActionClient>,
     pub files_to_process: Vec<(PathBuf, String)>,
+    pub auth_client: Option<Arc<AuthClient>>,
 }
 
 pub fn setup_logging(only_parse: bool, log_level: tracing::Level) -> anyhow::Result<()> {
@@ -74,17 +76,17 @@ pub fn setup_logging(only_parse: bool, log_level: tracing::Level) -> anyhow::Res
 pub async fn setup_auth_and_existing_ids(
     config: &Config,
     only_parse: bool,
-) -> anyhow::Result<(String, HashSet<String>)> {
+) -> anyhow::Result<(Option<Arc<AuthClient>>, HashSet<String>)> {
     if only_parse {
-        return Ok((String::new(), HashSet::new()));
+        return Ok((None, HashSet::new()));
     }
-    let auth_client = AuthClient::new(config.clone());
-    let token = auth_client
+    let auth_client = Arc::new(AuthClient::new(config.clone()));
+    let _token = auth_client
         .get_valid_token()
         .await
         .context("Failed to authenticate with Halo API")?;
     info!("Authentication successful");
-    let report_client = ReportClient::new(config.clone(), token.clone());
+    let report_client = ReportClient::new(config.clone(), auth_client.clone());
     let ids = report_client
         .get_existing_action_ids()
         .await
@@ -93,7 +95,7 @@ pub async fn setup_auth_and_existing_ids(
         "Found {} existing action IDs to skip",
         format_number(ids.len())
     );
-    Ok((token, ids))
+    Ok((Some(auth_client), ids))
 }
 
 pub fn discover_files(input_path: &str) -> anyhow::Result<Vec<(PathBuf, String)>> {
@@ -133,12 +135,8 @@ pub async fn setup(
     half: bool,
     input_path: &str,
 ) -> anyhow::Result<SetupResult> {
-    let (auth_token, existing_ids) = setup_auth_and_existing_ids(config, only_parse).await?;
-    let action_client = if only_parse {
-        None
-    } else {
-        Some(ActionClient::new(config.clone(), auth_token))
-    };
+    let (auth_client, existing_ids) = setup_auth_and_existing_ids(config, only_parse).await?;
+    let action_client = auth_client.as_ref().map(|auth| ActionClient::new(config.clone(), auth.clone()));
     let mut files_to_process = discover_files(input_path)?;
     if half {
         let total = files_to_process.len();
@@ -156,5 +154,6 @@ pub async fn setup(
         existing_ids,
         action_client,
         files_to_process,
+        auth_client,
     })
 }

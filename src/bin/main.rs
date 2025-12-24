@@ -14,7 +14,7 @@ fn format_number(n: usize) -> String {
     let mut result = String::new();
     let chars: Vec<char> = s.chars().collect();
     for (i, &ch) in chars.iter().enumerate() {
-        if i > 0 && (chars.len() - i) % 3 == 0 {
+        if i > 0 && (chars.len() - i).is_multiple_of(3) {
             result.push(',');
         }
         result.push(ch);
@@ -38,14 +38,21 @@ async fn main() -> anyhow::Result<()> {
         existing_ids,
         action_client,
         files_to_process,
+        auth_client: _,
     } = setup::setup(&config, only_parse, reverse, half, INPUT_PATH).await?;
 
     let total_sheets = files_to_process.len();
     if half {
         if reverse {
-            info!("Running in half mode (bottom half) with reverse: processing {} file(s) from bottom", format_number(total_sheets));
+            info!(
+                "Running in half mode (bottom half) with reverse: processing {} file(s) from bottom",
+                format_number(total_sheets)
+            );
         } else {
-            info!("Running in half mode (top half): processing {} file(s) from top", format_number(total_sheets));
+            info!(
+                "Running in half mode (top half): processing {} file(s) from top",
+                format_number(total_sheets)
+            );
         }
     } else if reverse {
         info!("Running in reverse mode: processing files from bottom to top");
@@ -62,15 +69,13 @@ async fn main() -> anyhow::Result<()> {
                 format_number(total_sheets)
             );
         }
+    } else if reverse {
+        info!(
+            "Starting import of {} file(s) in reverse order",
+            format_number(total_sheets)
+        );
     } else {
-        if reverse {
-            info!(
-                "Starting import of {} file(s) in reverse order",
-                format_number(total_sheets)
-            );
-        } else {
-            info!("Starting import of {} file(s)", format_number(total_sheets));
-        }
+        info!("Starting import of {} file(s)", format_number(total_sheets));
     }
     let mut total_actions_processed = 0;
     let mut total_actions_imported = 0;
