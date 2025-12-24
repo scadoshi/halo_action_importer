@@ -2,3 +2,4 @@
 .env
 log/
 input/
+.DS_Store
