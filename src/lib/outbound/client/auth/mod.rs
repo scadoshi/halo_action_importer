@@ -29,6 +29,7 @@ struct TokenRequest {
     scope: String,
 }
 
+#[derive(Debug)]
 pub struct AuthClient {
     config: Config,
     http_client: ReqwestClient,
