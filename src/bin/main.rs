@@ -6,7 +6,8 @@ use halo_action_importer::{
     },
 };
 use std::ffi::OsStr;
-use tracing::error;
+use std::time::Instant;
+use tracing::{error, info};
 
 const INPUT_PATH: &str = "input";
 
@@ -25,12 +26,18 @@ async fn main() -> anyhow::Result<()> {
     } = setup::setup(&config, only_parse, INPUT_PATH).await?;
 
     let total_sheets = files_to_process.len();
+    if only_parse {
+        info!("Starting parse-only import of {} file(s)", total_sheets);
+    } else {
+        info!("Starting import of {} file(s)", total_sheets);
+    }
     let mut total_actions_processed = 0;
     let mut total_actions_imported = 0;
     let mut total_actions_skipped = 0;
     let mut skipped_files: Vec<String> = Vec::new();
     let mut failed_imports: Vec<(String, String)> = Vec::new();
     let mut sheet_times: Vec<f64> = Vec::new();
+    let start_time = Instant::now();
 
     for (sheet_num, (file_path, file_name)) in files_to_process.iter().enumerate() {
         let sheet_number = sheet_num + 1;
@@ -78,13 +85,19 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    log_summary(ImportSummary {
-        total_processed: total_actions_processed,
-        total_imported: total_actions_imported,
-        total_skipped: total_actions_skipped,
-        total_failed: failed_imports.len(),
-        skipped_files,
-    });
+    let total_runtime = start_time.elapsed().as_secs_f64();
+    log_summary(
+        ImportSummary {
+            total_processed: total_actions_processed,
+            total_imported: total_actions_imported,
+            total_skipped: total_actions_skipped,
+            total_failed: failed_imports.len(),
+            skipped_files,
+            total_runtime_secs: total_runtime,
+            sheet_times,
+        },
+        only_parse,
+    );
 
     Ok(())
 }

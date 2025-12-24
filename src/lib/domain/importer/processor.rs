@@ -84,7 +84,12 @@ pub async fn process_csv_file(
         }
         let row_duration = row_start.elapsed().as_secs_f64();
         row_times.push(row_duration);
-        if last_progress_log.elapsed().as_secs() >= 60 || processed % 300 == 0 {
+        let should_log_progress = if only_parse {
+            last_progress_log.elapsed().as_secs() >= 5 || processed % 10_000 == 0
+        } else {
+            last_progress_log.elapsed().as_secs() >= 60 || processed % 100 == 0
+        };
+        if should_log_progress {
             log_progress(
                 sheet_number,
                 total_sheets,

@@ -32,7 +32,7 @@ pub fn setup_logging(only_parse: bool, log_level: tracing::Level) -> anyhow::Res
         .open(&log_file_path)
         .with_context(|| format!("Failed to open log file: {}", log_file_path))?;
     let level_filter = if only_parse {
-        LevelFilter::WARN
+        LevelFilter::INFO
     } else {
         LevelFilter::from_level(log_level)
     };
