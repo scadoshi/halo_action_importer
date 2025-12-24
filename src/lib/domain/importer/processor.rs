@@ -87,23 +87,23 @@ pub async fn process_csv_file(
                 imported += 1;
             }
         } else if config.existing_ids.contains(&action_id) {
-            skipped += 1;
-            info!("Skipped: action ID {} - already exists", action_id);
+                skipped += 1;
+                info!("Skipped: action ID {} - already exists", action_id);
         } else if let Some(client) = config.action_client {
             match client.post_action_object(action.clone()).await {
-                Ok(_) => {
-                    imported += 1;
+                    Ok(_) => {
+                        imported += 1;
                     info!(
                         "Success: imported action ID {} (ticket ID: {})",
                         action_id, action.ticket_id
                     );
+                    }
+                    Err(e) => {
+                        let error_msg = format!("Failed to import action ID {}: {}", action_id, e);
+                        error!("{}", error_msg);
+                        failed.push((action_id, error_msg.clone()));
+                    }
                 }
-                Err(e) => {
-                    let error_msg = format!("Failed to import action ID {}: {}", action_id, e);
-                    error!("{}", error_msg);
-                    failed.push((action_id, error_msg.clone()));
-                }
-            }
         } else {
             let error_msg = format!("Action client not available for action ID {}", action_id);
             error!("{}", error_msg);
@@ -167,8 +167,8 @@ pub async fn process_excel_file(
         action_client,
         sheet_times,
         file_name: file_path
-            .file_name()
-            .and_then(|n| n.to_str())
+        .file_name()
+        .and_then(|n| n.to_str())
             .unwrap_or("unknown file"),
         sheet_number,
         total_sheets,
@@ -215,23 +215,23 @@ pub async fn process_excel_file(
                 imported += 1;
             }
         } else if config.existing_ids.contains(&action_id) {
-            skipped += 1;
-            info!("Skipped: action ID {} - already exists", action_id);
+                skipped += 1;
+                info!("Skipped: action ID {} - already exists", action_id);
         } else if let Some(client) = config.action_client {
             match client.post_action_object(action.clone()).await {
-                Ok(_) => {
-                    imported += 1;
+                    Ok(_) => {
+                        imported += 1;
                     info!(
                         "Success: imported action ID {} (ticket ID: {})",
                         action_id, action.ticket_id
                     );
+                    }
+                    Err(e) => {
+                        let error_msg = format!("Failed to import action ID {}: {}", action_id, e);
+                        error!("{}", error_msg);
+                        failed.push((action_id, error_msg.clone()));
+                    }
                 }
-                Err(e) => {
-                    let error_msg = format!("Failed to import action ID {}: {}", action_id, e);
-                    error!("{}", error_msg);
-                    failed.push((action_id, error_msg.clone()));
-                }
-            }
         } else {
             let error_msg = format!("Action client not available for action ID {}", action_id);
             error!("{}", error_msg);
@@ -294,7 +294,7 @@ fn format_number(n: usize) -> String {
     let mut result = String::new();
     let chars: Vec<char> = s.chars().collect();
     for (i, &ch) in chars.iter().enumerate() {
-        if i > 0 && (chars.len() - i) % 3 == 0 {
+        if i > 0 && (chars.len() - i).is_multiple_of(3) {
             result.push(',');
         }
         result.push(ch);

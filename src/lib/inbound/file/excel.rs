@@ -308,7 +308,7 @@ impl Excel for Reader {
                 let mut row_vec = row.to_vec();
                 while row_vec.len() < headers.len() {
                     row_vec.push(Data::Empty);
-                }
+            }
                 row_vec
             })
             .collect();
