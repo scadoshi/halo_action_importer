@@ -1,10 +1,12 @@
 pub mod token;
 
+use crate::{config::Config, outbound::client::auth::token::AuthToken};
+use anyhow::Context;
 use reqwest::Client as ReqwestClient;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use crate::{config::Config, outbound::client::auth::token::AuthToken};
+use tracing::error;
 
 #[derive(Debug, Deserialize)]
 struct TokenResponse {
@@ -45,8 +47,10 @@ impl AuthClient {
     pub async fn get_valid_token(&self) -> anyhow::Result<String> {
         let mut token_guard = self.current_token.lock().await;
 
-        if let Some(token) = token_guard.as_ref() && !token.is_expired() {
-                return Ok(token.header_value());
+        if let Some(token) = token_guard.as_ref()
+            && !token.is_expired()
+        {
+            return Ok(token.header_value());
         }
 
         let new_token = self.fetch_new_token().await?;
@@ -69,29 +73,62 @@ impl AuthClient {
             .header("Content-Type", "application/x-www-form-urlencoded")
             .form(&token_request)
             .send()
-            .await?;
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to send authentication request to: {}",
+                    self.config.token_url
+                )
+            })?;
 
         let status = response.status();
 
         if status == reqwest::StatusCode::UNAUTHORIZED {
-            anyhow::bail!("invalid credentials");
+            error!(
+                "Authentication failed: invalid credentials (status: {})",
+                status
+            );
+            anyhow::bail!("Authentication failed: invalid credentials");
         }
 
-        let response_text = response
-            .text()
-            .await
-            .map_err(|e| anyhow::anyhow!("failed to read response: {}", e))?;
+        let response_text = match response.text().await.with_context(|| {
+            format!(
+                "failed to read authentication response body (status: {})",
+                status
+            )
+        }) {
+            Ok(text) => text,
+            Err(e) => {
+                error!("Failed to read authentication response: {}", e);
+                return Err(e);
+            }
+        };
 
         if let Ok(error_response) = serde_json::from_str::<ErrorResponse>(&response_text) {
+            error!(
+                "Authentication error: {}: {}",
+                error_response.error, error_response.error_description
+            );
             anyhow::bail!(
-                "{}: {}",
+                "Authentication error: {}: {}",
                 error_response.error,
                 error_response.error_description
             );
         }
 
-        let token_response: TokenResponse = serde_json::from_str(&response_text)
-            .map_err(|e| anyhow::anyhow!("failed to parse token response: {}", e))?;
+        let token_response: TokenResponse =
+            match serde_json::from_str(&response_text).with_context(|| {
+                format!(
+                    "failed to parse token response JSON (status: {}): {}",
+                    status, response_text
+                )
+            }) {
+                Ok(token) => token,
+                Err(e) => {
+                    error!("Failed to parse token response: {}", e);
+                    return Err(e);
+                }
+            };
 
         Ok(AuthToken::new(
             token_response.access_token,
