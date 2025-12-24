@@ -3,7 +3,7 @@ use crate::outbound::client::action::ActionClient;
 use std::collections::HashSet;
 use std::path::Path;
 use std::time::Instant;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 pub struct ProcessingStats {
     pub processed: usize,
@@ -20,6 +20,7 @@ struct ProcessConfig<'a> {
     sheet_number: usize,
     total_sheets: usize,
     only_parse: bool,
+    missing_tickets: &'a mut HashSet<u32>,
 }
 
 pub async fn process_csv_file(
@@ -32,6 +33,7 @@ pub async fn process_csv_file(
     total_sheets: usize,
     only_parse: bool,
 ) -> anyhow::Result<ProcessingStats> {
+    let mut missing_tickets: HashSet<u32> = HashSet::new();
     let config = ProcessConfig {
         existing_ids,
         action_client,
@@ -40,6 +42,7 @@ pub async fn process_csv_file(
         sheet_number,
         total_sheets,
         only_parse,
+        missing_tickets: &mut missing_tickets,
     };
     let iter = <Reader as Csv>::csv_action_iter(file_path)?;
     let total_rows = iter.total_rows();
@@ -98,6 +101,9 @@ pub async fn process_csv_file(
         } else if config.existing_ids.contains(&action_id) {
             skipped += 1;
             pending_skips += 1;
+        } else if config.missing_tickets.contains(&ticket_id) {
+            skipped += 1;
+            pending_skips += 1;
         } else {
             if pending_skips > 0 {
                 info!(
@@ -117,6 +123,19 @@ pub async fn process_csv_file(
                         row_times.push(row_start.elapsed().as_secs_f64());
                     }
                     Err(e) => {
+                        let error_str = e.to_string();
+                        let is_not_found = error_str.contains("not found")
+                            || error_str.contains("Not Found")
+                            || error_str.contains("404")
+                            || error_str.contains("does not exist")
+                            || error_str.contains("doesn't exist");
+                        if is_not_found {
+                            config.missing_tickets.insert(ticket_id);
+                            warn!(
+                                "Ticket ID: {} not found - will skip future actions for this ticket",
+                                ticket_id
+                            );
+                        }
                         let error_msg = format!(
                             "Failed to import action ID: {} (ticket ID: {}): {}",
                             action_id, ticket_id, e
@@ -191,6 +210,7 @@ pub async fn process_excel_file(
     total_sheets: usize,
     only_parse: bool,
 ) -> anyhow::Result<ProcessingStats> {
+    let mut missing_tickets: HashSet<u32> = HashSet::new();
     let config = ProcessConfig {
         existing_ids,
         action_client,
@@ -202,6 +222,7 @@ pub async fn process_excel_file(
         sheet_number,
         total_sheets,
         only_parse,
+        missing_tickets: &mut missing_tickets,
     };
     let iter = <Reader as Excel>::excel_action_iter(file_path)?;
     let total_rows = iter.total_rows();
@@ -255,6 +276,9 @@ pub async fn process_excel_file(
         } else if config.existing_ids.contains(&action_id) {
             skipped += 1;
             pending_skips += 1;
+        } else if config.missing_tickets.contains(&ticket_id) {
+            skipped += 1;
+            pending_skips += 1;
         } else {
             if pending_skips > 0 {
                 info!(
@@ -274,6 +298,19 @@ pub async fn process_excel_file(
                         row_times.push(row_start.elapsed().as_secs_f64());
                     }
                     Err(e) => {
+                        let error_str = e.to_string();
+                        let is_not_found = error_str.contains("not found")
+                            || error_str.contains("Not Found")
+                            || error_str.contains("404")
+                            || error_str.contains("does not exist")
+                            || error_str.contains("doesn't exist");
+                        if is_not_found {
+                            config.missing_tickets.insert(ticket_id);
+                            warn!(
+                                "Ticket ID: {} not found - will skip future actions for this ticket",
+                                ticket_id
+                            );
+                        }
                         let error_msg = format!(
                             "Failed to import action ID: {} (ticket ID: {}): {}",
                             action_id, ticket_id, e
