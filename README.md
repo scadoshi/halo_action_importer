@@ -6,12 +6,18 @@ A Rust application for bulk importing actions into Halo. Processes CSV and Excel
 
 - Bulk import actions from CSV and Excel files
 - Automatic duplicate detection using unique action identifiers
+- Missing ticket detection - skips future actions for tickets not found in system
+- Automatic token refresh and 401 retry logic for long-running imports
 - Incremental processing to handle large files efficiently
-- Comprehensive logging with configurable log levels
-- Performance statistics (runtime, entries per minute, time per entry)
+- Comprehensive logging with configurable log levels and timestamps
+- Performance statistics (runtime, entries per minute, time per entry, estimated time remaining)
 - Parse-only mode for validation without API calls
+- Reverse mode for processing files from bottom to top
+- Half mode for processing only half the files (useful for parallel execution)
+- Batched skip messages to reduce log clutter
 - Progress tracking with configurable update frequencies
 - Error handling that continues processing on failures
+- Timezone conversion from Arizona time (UTC-7) to UTC for API calls
 
 ## Requirements
 
@@ -74,6 +80,8 @@ To validate files without making API calls:
 
 ```bash
 cargo run --release -- --only-parse
+# or use short form
+cargo run --release -- --op
 ```
 
 This mode:
@@ -82,6 +90,42 @@ This mode:
 - Does not make any API calls
 - Uses reduced logging frequency (every 10,000 entries or 5 seconds)
 - Shows success message if all actions parse successfully
+
+### Reverse Mode
+
+Process files from bottom to top (useful for parallel execution):
+
+```bash
+cargo run --release -- --reverse
+# or use short form
+cargo run --release -- --rev
+```
+
+### Half Mode
+
+Process only half the files (combine with `--reverse` for bottom half):
+
+```bash
+# Process top half
+cargo run --release -- --half
+
+# Process bottom half
+cargo run --release -- --half --reverse
+```
+
+This is useful for running two instances in parallel - one processing the top half, one processing the bottom half.
+
+### Combined Modes
+
+You can combine flags:
+
+```bash
+# Parse-only mode in reverse
+cargo run --release -- --only-parse --reverse
+
+# Import bottom half in reverse
+cargo run --release -- --half --reverse
+```
 
 ## File Format
 
@@ -103,20 +147,50 @@ Additional fields are allowed and will be ignored during deserialization.
 
 Logs are written to both:
 - Console (stdout)
-- Log file: `log/importer_YYYY-MM-DD_HH-MM-SS.log` (UTC timestamp)
+- Log file: `log/YYYY-MM-DD_HH-MM-SS.log` (UTC timestamp with seconds)
+
+All log entries include timestamps with seconds for precise tracking.
 
 ### Log Levels
 
 - `trace` - Most verbose, includes all internal operations
 - `debug` - Debug information and detailed flow
 - `info` - General information, progress updates, summaries (default)
-- `warn` - Warnings and non-critical errors
+- `warn` - Warnings and non-critical errors (e.g., missing tickets)
 - `error` - Errors that prevent processing
 
 ### Progress Updates
 
 - **Import mode**: Updates every 100 entries or 1 minute
 - **Parse-only mode**: Updates every 10,000 entries or 5 seconds
+
+Progress logs include:
+- Current row count and percentage complete
+- Number imported and skipped
+- Average time per row (based only on actual imports, not skips)
+- Estimated time remaining (formatted as days/hours/minutes/seconds)
+
+### Log Messages
+
+**Skip Messages**: Consecutive skips are batched into single messages:
+```
+Skipped 1,234 entries (already exist)
+```
+
+**Success Messages**: Each successful import is logged:
+```
+Success: imported action ID: 12345 (ticket ID: 67890)
+```
+
+**Missing Tickets**: When a ticket is not found, it's logged once and future actions for that ticket are skipped:
+```
+WARN Ticket ID: 67890 not found - will skip future actions for this ticket
+```
+
+**Error Messages**: Include both action ID and ticket ID:
+```
+ERROR Failed to import action ID: 12345 (ticket ID: 67890): <error details>
+```
 
 ## Output
 
@@ -138,7 +212,18 @@ The application is designed to be resilient:
 - Deserialization errors are logged and the row is skipped
 - API errors are logged and processing continues
 - File read errors are logged and the file is skipped
+- Missing tickets are detected and future actions for them are automatically skipped
+- Token expiration is handled automatically with refresh and retry
+- 401 Unauthorized responses trigger automatic token refresh and retry
 - All errors are collected and reported in the final summary
+
+### Token Management
+
+The application automatically manages OAuth2 tokens:
+- Checks token expiration before each API call
+- Refreshes tokens when expired (with 30-second buffer)
+- Retries requests once on 401 Unauthorized
+- Handles long-running imports without manual intervention
 
 ## Project Structure
 
