@@ -50,6 +50,7 @@ pub async fn process_csv_file(
     let sheet_start = Instant::now();
     let mut row_times: Vec<f64> = Vec::new();
     let mut last_progress_log = Instant::now();
+    let mut pending_skips = 0usize;
     if let Some(total) = total_rows {
         info!(
             "Processing sheet {} of {}: CSV file '{}' ({} rows)",
@@ -69,6 +70,13 @@ pub async fn process_csv_file(
         let action = match action_result {
             Ok(a) => a,
             Err(e) => {
+                if pending_skips > 0 {
+                    info!(
+                        "Skipped {} entries (already exist)",
+                        format_number(pending_skips)
+                    );
+                    pending_skips = 0;
+                }
                 let error_msg = format!(
                     "Failed to deserialize row in CSV file '{}': {}",
                     config.file_name, e
@@ -80,6 +88,7 @@ pub async fn process_csv_file(
         };
         processed += 1;
         let action_id = action.action_id().to_string();
+        let ticket_id = action.ticket_id;
         if config.only_parse {
             if config.existing_ids.contains(&action_id) {
                 skipped += 1;
@@ -87,30 +96,44 @@ pub async fn process_csv_file(
                 imported += 1;
             }
         } else if config.existing_ids.contains(&action_id) {
-                skipped += 1;
-                info!("Skipped: action ID {} - already exists", action_id);
-        } else if let Some(client) = config.action_client {
-            match client.post_action_object(action.clone()).await {
+            skipped += 1;
+            pending_skips += 1;
+        } else {
+            if pending_skips > 0 {
+                info!(
+                    "Skipped {} entries (already exist)",
+                    format_number(pending_skips)
+                );
+                pending_skips = 0;
+            }
+            if let Some(client) = config.action_client {
+                match client.post_action_object(action.clone()).await {
                     Ok(_) => {
                         imported += 1;
-                    info!(
-                        "Success: imported action ID {} (ticket ID: {})",
-                        action_id, action.ticket_id
-                    );
+                        info!(
+                            "Success: imported action ID: {} (ticket ID: {})",
+                            action_id, ticket_id
+                        );
+                        row_times.push(row_start.elapsed().as_secs_f64());
                     }
                     Err(e) => {
-                        let error_msg = format!("Failed to import action ID {}: {}", action_id, e);
+                        let error_msg = format!(
+                            "Failed to import action ID: {} (ticket ID: {}): {}",
+                            action_id, ticket_id, e
+                        );
                         error!("{}", error_msg);
                         failed.push((action_id, error_msg.clone()));
                     }
                 }
-        } else {
-            let error_msg = format!("Action client not available for action ID {}", action_id);
-            error!("{}", error_msg);
-            failed.push((action_id, error_msg.clone()));
+            } else {
+                let error_msg = format!(
+                    "Action client not available for action ID: {} (ticket ID: {})",
+                    action_id, ticket_id
+                );
+                error!("{}", error_msg);
+                failed.push((action_id, error_msg.clone()));
+            }
         }
-        let row_duration = row_start.elapsed().as_secs_f64();
-        row_times.push(row_duration);
         let should_log_progress = if only_parse {
             last_progress_log.elapsed().as_secs() >= 5 || processed % 10_000 == 0
         } else {
@@ -130,6 +153,12 @@ pub async fn process_csv_file(
             });
             last_progress_log = Instant::now();
         }
+    }
+    if pending_skips > 0 {
+        info!(
+            "Skipped {} entries (already exist)",
+            format_number(pending_skips)
+        );
     }
     let sheet_duration = sheet_start.elapsed().as_secs_f64();
     config.sheet_times.push(sheet_duration);
@@ -167,8 +196,8 @@ pub async fn process_excel_file(
         action_client,
         sheet_times,
         file_name: file_path
-        .file_name()
-        .and_then(|n| n.to_str())
+            .file_name()
+            .and_then(|n| n.to_str())
             .unwrap_or("unknown file"),
         sheet_number,
         total_sheets,
@@ -184,6 +213,7 @@ pub async fn process_excel_file(
     let sheet_start = Instant::now();
     let mut row_times: Vec<f64> = Vec::new();
     let mut last_progress_log = Instant::now();
+    let mut pending_skips = 0usize;
     info!(
         "Processing sheet {} of {}: Excel file '{}', sheet '{}' ({} rows)",
         config.sheet_number,
@@ -197,6 +227,13 @@ pub async fn process_excel_file(
         let action = match action_result {
             Ok(a) => a,
             Err(e) => {
+                if pending_skips > 0 {
+                    info!(
+                        "Skipped {} entries (already exist)",
+                        format_number(pending_skips)
+                    );
+                    pending_skips = 0;
+                }
                 let error_msg = format!(
                     "Failed to deserialize row in Excel file '{}', sheet '{}': {}",
                     config.file_name, sheet_name, e
@@ -208,6 +245,7 @@ pub async fn process_excel_file(
         };
         processed += 1;
         let action_id = action.action_id().to_string();
+        let ticket_id = action.ticket_id;
         if config.only_parse {
             if config.existing_ids.contains(&action_id) {
                 skipped += 1;
@@ -215,30 +253,44 @@ pub async fn process_excel_file(
                 imported += 1;
             }
         } else if config.existing_ids.contains(&action_id) {
-                skipped += 1;
-                info!("Skipped: action ID {} - already exists", action_id);
-        } else if let Some(client) = config.action_client {
-            match client.post_action_object(action.clone()).await {
+            skipped += 1;
+            pending_skips += 1;
+        } else {
+            if pending_skips > 0 {
+                info!(
+                    "Skipped {} entries (already exist)",
+                    format_number(pending_skips)
+                );
+                pending_skips = 0;
+            }
+            if let Some(client) = config.action_client {
+                match client.post_action_object(action.clone()).await {
                     Ok(_) => {
                         imported += 1;
-                    info!(
-                        "Success: imported action ID {} (ticket ID: {})",
-                        action_id, action.ticket_id
-                    );
+                        info!(
+                            "Success: imported action ID: {} (ticket ID: {})",
+                            action_id, ticket_id
+                        );
+                        row_times.push(row_start.elapsed().as_secs_f64());
                     }
                     Err(e) => {
-                        let error_msg = format!("Failed to import action ID {}: {}", action_id, e);
+                        let error_msg = format!(
+                            "Failed to import action ID: {} (ticket ID: {}): {}",
+                            action_id, ticket_id, e
+                        );
                         error!("{}", error_msg);
                         failed.push((action_id, error_msg.clone()));
                     }
                 }
-        } else {
-            let error_msg = format!("Action client not available for action ID {}", action_id);
-            error!("{}", error_msg);
-            failed.push((action_id, error_msg.clone()));
+            } else {
+                let error_msg = format!(
+                    "Action client not available for action ID: {} (ticket ID: {})",
+                    action_id, ticket_id
+                );
+                error!("{}", error_msg);
+                failed.push((action_id, error_msg.clone()));
+            }
         }
-        let row_duration = row_start.elapsed().as_secs_f64();
-        row_times.push(row_duration);
         if last_progress_log.elapsed().as_secs() >= 60 || processed % 300 == 0 {
             log_progress(ProgressParams {
                 sheet_number: config.sheet_number,
@@ -253,6 +305,12 @@ pub async fn process_excel_file(
             });
             last_progress_log = Instant::now();
         }
+    }
+    if pending_skips > 0 {
+        info!(
+            "Skipped {} entries (already exist)",
+            format_number(pending_skips)
+        );
     }
     let sheet_duration = sheet_start.elapsed().as_secs_f64();
     config.sheet_times.push(sheet_duration);
