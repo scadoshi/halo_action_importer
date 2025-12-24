@@ -43,9 +43,9 @@ impl Iterator for CsvActionIterator {
 
 impl Csv for Reader {
     fn try_csv_to_action_objects(path: &Path) -> anyhow::Result<Vec<ActionObject>> {
-        let mut iter = Self::csv_action_iter(path)?;
+        let iter = Self::csv_action_iter(path)?;
         let mut output = Vec::new();
-        while let Some(result) = iter.next() {
+        for result in iter {
             output.push(result?);
         }
         Ok(output)

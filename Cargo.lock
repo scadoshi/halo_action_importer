@@ -91,6 +91,7 @@ checksum = "41bdeb83af82cd9cb686a19ed7efc2f50a21c262610f51ce945a8528860725ce"
 dependencies = [
  "atoi_simd",
  "byteorder",
+ "chrono",
  "codepage",
  "encoding_rs",
  "fast-float2",

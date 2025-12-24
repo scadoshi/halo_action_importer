@@ -73,7 +73,8 @@ impl Config {
             })?;
 
         let log_level_str = std::env::var(LOG_LEVEL_KEY).unwrap_or_else(|_| "info".to_string());
-        let log_level = match log_level_str.to_lowercase().as_str() {
+        let log_level_str_trimmed = log_level_str.trim().to_lowercase();
+        let log_level = match log_level_str_trimmed.as_str() {
             "trace" => Level::TRACE,
             "debug" => Level::DEBUG,
             "info" => Level::INFO,
@@ -82,7 +83,7 @@ impl Config {
             _ => {
                 anyhow::bail!(
                     "invalid log level '{}' for {}. must be one of: trace, debug, info, warn, error",
-                    log_level_str,
+                    log_level_str_trimmed,
                     LOG_LEVEL_KEY
                 );
             }

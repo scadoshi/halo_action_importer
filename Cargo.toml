@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0"
-calamine = "0.32.0"
+calamine = { version = "0.32.0", features = ["chrono"] }
 chrono = { version = "0.4", features = ["serde"] }
 colored = "3.0.0"
 csv = "1.4.0"
