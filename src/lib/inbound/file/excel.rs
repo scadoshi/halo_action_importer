@@ -84,7 +84,26 @@ impl Iterator for ExcelActionIterator {
                                     None => serde_json::Value::String(s.clone()),
                                 }
                             } else {
-                                serde_json::Value::String(s.clone())
+                                let dt_clean = trimmed.trim_end_matches('Z').trim_end_matches('z');
+                                match NaiveDateTime::parse_from_str(
+                                    dt_clean,
+                                    "%Y-%m-%dT%H:%M:%S%.f",
+                                ) {
+                                    Ok(ndt) => serde_json::Value::String(
+                                        ndt.format("%Y-%m-%dT%H:%M:%S").to_string(),
+                                    ),
+                                    Err(_) => {
+                                        match NaiveDateTime::parse_from_str(
+                                            dt_clean,
+                                            "%Y-%m-%dT%H:%M:%S",
+                                        ) {
+                                            Ok(ndt) => serde_json::Value::String(
+                                                ndt.format("%Y-%m-%dT%H:%M:%S").to_string(),
+                                            ),
+                                            Err(_) => serde_json::Value::String(s.clone()),
+                                        }
+                                    }
+                                }
                             }
                         } else if is_numeric_field {
                             if let Ok(num) = trimmed.parse::<u32>() {
@@ -144,16 +163,32 @@ impl Iterator for ExcelActionIterator {
                     Data::DateTimeIso(dt) => {
                         has_any_data = true;
                         if is_date_field {
-                            match NaiveDateTime::parse_from_str(dt, "%Y-%m-%dT%H:%M:%S%.f") {
+                            let dt_clean = dt.trim_end_matches('Z').trim_end_matches('z');
+                            match NaiveDateTime::parse_from_str(dt_clean, "%Y-%m-%dT%H:%M:%S%.f") {
                                 Ok(ndt) => serde_json::Value::String(
-                                    ndt.format("%Y-%m-%d %H:%M:%S").to_string(),
+                                    ndt.format("%Y-%m-%dT%H:%M:%S").to_string(),
                                 ),
                                 Err(_) => {
-                                    match NaiveDateTime::parse_from_str(dt, "%Y-%m-%d %H:%M:%S") {
+                                    match NaiveDateTime::parse_from_str(
+                                        dt_clean,
+                                        "%Y-%m-%dT%H:%M:%S",
+                                    ) {
                                         Ok(ndt) => serde_json::Value::String(
-                                            ndt.format("%Y-%m-%d %H:%M:%S").to_string(),
+                                            ndt.format("%Y-%m-%dT%H:%M:%S").to_string(),
                                         ),
-                                        Err(_) => serde_json::Value::String(dt.clone()),
+                                        Err(_) => {
+                                            match NaiveDateTime::parse_from_str(
+                                                dt_clean,
+                                                "%Y-%m-%d %H:%M:%S",
+                                            ) {
+                                                Ok(ndt) => serde_json::Value::String(
+                                                    ndt.format("%Y-%m-%dT%H:%M:%S").to_string(),
+                                                ),
+                                                Err(_) => {
+                                                    serde_json::Value::String(dt_clean.to_string())
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
