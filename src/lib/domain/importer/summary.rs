@@ -1,5 +1,18 @@
 use tracing::{info, warn};
 
+fn format_number(n: usize) -> String {
+    let s = n.to_string();
+    let mut result = String::new();
+    let chars: Vec<char> = s.chars().collect();
+    for (i, &ch) in chars.iter().enumerate() {
+        if i > 0 && (chars.len() - i) % 3 == 0 {
+            result.push(',');
+        }
+        result.push(ch);
+    }
+    result
+}
+
 pub struct ImportSummary {
     pub total_processed: usize,
     pub total_imported: usize,
@@ -12,21 +25,34 @@ pub struct ImportSummary {
 
 pub fn log_summary(summary: ImportSummary, only_parse: bool) {
     info!("=== Import Summary ===");
-    info!("Total actions processed: {}", summary.total_processed);
-    info!("Actions skipped (already exist): {}", summary.total_skipped);
-    info!("Actions successfully imported: {}", summary.total_imported);
-    info!("Actions failed to import: {}", summary.total_failed);
+    info!(
+        "Total actions processed: {}",
+        format_number(summary.total_processed)
+    );
+    info!(
+        "Actions skipped (already exist): {}",
+        format_number(summary.total_skipped)
+    );
+    info!(
+        "Actions successfully imported: {}",
+        format_number(summary.total_imported)
+    );
+    info!(
+        "Actions failed to import: {}",
+        format_number(summary.total_failed)
+    );
     if !summary.skipped_files.is_empty() {
         warn!(
             "Files that could not be read: {}",
-            summary.skipped_files.len()
+            format_number(summary.skipped_files.len())
         );
     }
     if only_parse && summary.total_failed == 0 && summary.skipped_files.is_empty() {
         let successful = summary.total_imported + summary.total_skipped;
         info!(
             "Success: {}/{} actions parsed successfully",
-            successful, summary.total_processed
+            format_number(successful),
+            format_number(summary.total_processed)
         );
     }
     if summary.total_processed > 0 {

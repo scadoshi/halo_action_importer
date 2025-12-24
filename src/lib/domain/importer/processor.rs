@@ -53,7 +53,10 @@ pub async fn process_csv_file(
     if let Some(total) = total_rows {
         info!(
             "Processing sheet {} of {}: CSV file '{}' ({} rows)",
-            config.sheet_number, config.total_sheets, config.file_name, total
+            config.sheet_number,
+            config.total_sheets,
+            config.file_name,
+            format_number(total)
         );
     } else {
         info!(
@@ -136,9 +139,9 @@ pub async fn process_csv_file(
         config.sheet_number,
         config.total_sheets,
         config.file_name,
-        processed,
-        imported,
-        skipped,
+        format_number(processed),
+        format_number(imported),
+        format_number(skipped),
         sheet_duration,
         avg_sheet_time
     );
@@ -183,7 +186,11 @@ pub async fn process_excel_file(
     let mut last_progress_log = Instant::now();
     info!(
         "Processing sheet {} of {}: Excel file '{}', sheet '{}' ({} rows)",
-        config.sheet_number, config.total_sheets, config.file_name, sheet_name, total_rows
+        config.sheet_number,
+        config.total_sheets,
+        config.file_name,
+        sheet_name,
+        format_number(total_rows)
     );
     for action_result in iter {
         let row_start = Instant::now();
@@ -256,9 +263,9 @@ pub async fn process_excel_file(
         config.total_sheets,
         config.file_name,
         sheet_name,
-        processed,
-        imported,
-        skipped,
+        format_number(processed),
+        format_number(imported),
+        format_number(skipped),
         sheet_duration,
         avg_sheet_time
     );
@@ -282,6 +289,43 @@ struct ProgressParams<'a> {
     row_times: &'a [f64],
 }
 
+fn format_number(n: usize) -> String {
+    let s = n.to_string();
+    let mut result = String::new();
+    let chars: Vec<char> = s.chars().collect();
+    for (i, &ch) in chars.iter().enumerate() {
+        if i > 0 && (chars.len() - i) % 3 == 0 {
+            result.push(',');
+        }
+        result.push(ch);
+    }
+    result
+}
+
+fn format_duration(seconds: f64) -> String {
+    let total_seconds = seconds as u64;
+    let days = total_seconds / 86400;
+    let hours = (total_seconds % 86400) / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let secs = total_seconds % 60;
+
+    let mut parts = Vec::new();
+    if days > 0 {
+        parts.push(format!("{}d", days));
+    }
+    if hours > 0 {
+        parts.push(format!("{}h", hours));
+    }
+    if minutes > 0 {
+        parts.push(format!("{}m", minutes));
+    }
+    if secs > 0 || parts.is_empty() {
+        parts.push(format!("{}s", secs));
+    }
+
+    parts.join(" ")
+}
+
 fn log_progress(params: ProgressParams<'_>) {
     let avg_row_time = if params.row_times.is_empty() {
         0.0
@@ -291,6 +335,7 @@ fn log_progress(params: ProgressParams<'_>) {
     if let Some(total) = params.total_rows {
         let remaining = total.saturating_sub(params.processed);
         let estimated_remaining = avg_row_time * remaining as f64;
+        let remaining_formatted = format_duration(estimated_remaining);
         let progress_pct = if total > 0 {
             (params.processed as f64 / total as f64) * 100.0
         } else {
@@ -298,32 +343,32 @@ fn log_progress(params: ProgressParams<'_>) {
         };
         if let Some(sheet) = params.sheet_name {
             info!(
-                "Progress [sheet {} of {}: '{}' - sheet '{}']: {}/{} rows ({:.1}%), {} imported, {} skipped | avg {:.2}s/row | est. remaining: {:.1}s",
+                "Progress [sheet {} of {}: '{}' - sheet '{}']: {}/{} rows ({:.1}%), {} imported, {} skipped | avg {:.2}s/row | est. remaining: {}",
                 params.sheet_number,
                 params.total_sheets,
                 params.file_name,
                 sheet,
-                params.processed,
-                total,
+                format_number(params.processed),
+                format_number(total),
                 progress_pct,
-                params.imported,
-                params.skipped,
+                format_number(params.imported),
+                format_number(params.skipped),
                 avg_row_time,
-                estimated_remaining
+                remaining_formatted
             );
         } else {
             info!(
-                "Progress [sheet {} of {}: '{}']: {}/{} rows ({:.1}%), {} imported, {} skipped | avg {:.2}s/row | est. remaining: {:.1}s",
+                "Progress [sheet {} of {}: '{}']: {}/{} rows ({:.1}%), {} imported, {} skipped | avg {:.2}s/row | est. remaining: {}",
                 params.sheet_number,
                 params.total_sheets,
                 params.file_name,
-                params.processed,
-                total,
+                format_number(params.processed),
+                format_number(total),
                 progress_pct,
-                params.imported,
-                params.skipped,
+                format_number(params.imported),
+                format_number(params.skipped),
                 avg_row_time,
-                estimated_remaining
+                remaining_formatted
             );
         }
     } else {
@@ -332,9 +377,9 @@ fn log_progress(params: ProgressParams<'_>) {
             params.sheet_number,
             params.total_sheets,
             params.file_name,
-            params.processed,
-            params.imported,
-            params.skipped,
+            format_number(params.processed),
+            format_number(params.imported),
+            format_number(params.skipped),
             avg_row_time
         );
     }

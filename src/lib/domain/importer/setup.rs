@@ -12,6 +12,19 @@ use tracing_subscriber::{
     Registry, filter::LevelFilter, layer::SubscriberExt, util::SubscriberInitExt,
 };
 
+fn format_number(n: usize) -> String {
+    let s = n.to_string();
+    let mut result = String::new();
+    let chars: Vec<char> = s.chars().collect();
+    for (i, &ch) in chars.iter().enumerate() {
+        if i > 0 && (chars.len() - i) % 3 == 0 {
+            result.push(',');
+        }
+        result.push(ch);
+    }
+    result
+}
+
 const LOG_DIR: &str = "log";
 
 pub struct SetupResult {
@@ -24,7 +37,7 @@ pub fn setup_logging(only_parse: bool, log_level: tracing::Level) -> anyhow::Res
     std::fs::create_dir_all(LOG_DIR)
         .with_context(|| format!("Failed to create log directory: {}", LOG_DIR))?;
     let timestamp_str = Utc::now().format("%Y-%m-%d_%H-%M-%S");
-    let log_file_path = format!("{}/importer_{}.log", LOG_DIR, timestamp_str);
+    let log_file_path = format!("{}/{}.log", LOG_DIR, timestamp_str);
     let log_file = OpenOptions::new()
         .create(true)
         .write(true)
@@ -41,9 +54,14 @@ pub fn setup_logging(only_parse: bool, log_level: tracing::Level) -> anyhow::Res
         .with(
             tracing_subscriber::fmt::Layer::default()
                 .with_writer(std::sync::Mutex::new(log_file))
-                .with_ansi(false),
+                .with_ansi(false)
+                .with_timer(tracing_subscriber::fmt::time::ChronoUtc::rfc_3339()),
         )
-        .with(tracing_subscriber::fmt::Layer::default().with_writer(std::io::stdout))
+        .with(
+            tracing_subscriber::fmt::Layer::default()
+                .with_writer(std::io::stdout)
+                .with_timer(tracing_subscriber::fmt::time::ChronoUtc::rfc_3339()),
+        )
         .init();
     info!("Starting Halo action importer");
     if only_parse {
@@ -71,7 +89,10 @@ pub async fn setup_auth_and_existing_ids(
         .get_existing_action_ids()
         .await
         .context("Failed to fetch existing action IDs from report")?;
-    info!("Found {} existing action IDs to skip", ids.len());
+    info!(
+        "Found {} existing action IDs to skip",
+        format_number(ids.len())
+    );
     Ok((token, ids))
 }
 
@@ -108,6 +129,8 @@ pub fn discover_files(input_path: &str) -> anyhow::Result<Vec<(PathBuf, String)>
 pub async fn setup(
     config: &Config,
     only_parse: bool,
+    reverse: bool,
+    half: bool,
     input_path: &str,
 ) -> anyhow::Result<SetupResult> {
     let (auth_token, existing_ids) = setup_auth_and_existing_ids(config, only_parse).await?;
@@ -116,7 +139,19 @@ pub async fn setup(
     } else {
         Some(ActionClient::new(config.clone(), auth_token))
     };
-    let files_to_process = discover_files(input_path)?;
+    let mut files_to_process = discover_files(input_path)?;
+    if half {
+        let total = files_to_process.len();
+        let half_count = total / 2;
+        if reverse {
+            files_to_process.reverse();
+            files_to_process.truncate(half_count);
+        } else {
+            files_to_process.truncate(half_count);
+        }
+    } else if reverse {
+        files_to_process.reverse();
+    }
     Ok(SetupResult {
         existing_ids,
         action_client,

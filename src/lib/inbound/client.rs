@@ -5,6 +5,19 @@ use serde::Deserialize;
 use std::collections::HashSet;
 use tracing::error;
 
+fn format_number(n: usize) -> String {
+    let s = n.to_string();
+    let mut result = String::new();
+    let chars: Vec<char> = s.chars().collect();
+    for (i, &ch) in chars.iter().enumerate() {
+        if i > 0 && (chars.len() - i) % 3 == 0 {
+            result.push(',');
+        }
+        result.push(ch);
+    }
+    result
+}
+
 #[derive(Debug, Deserialize)]
 struct ReportResponse {
     #[serde(rename = "existingActionIds")]
@@ -82,7 +95,10 @@ impl ReportClient {
             }
         }
 
-        tracing::info!("Found {} existing action IDs", existing_ids.len());
+        tracing::info!(
+            "Found {} existing action IDs",
+            format_number(existing_ids.len())
+        );
         Ok(existing_ids)
     }
 }
