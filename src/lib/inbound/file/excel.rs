@@ -145,16 +145,19 @@ impl Iterator for ExcelActionIterator {
                     Data::DateTime(dt) => {
                         has_any_data = true;
                         if is_date_field {
-                            let dt_str = dt.to_string();
-                            if let Ok(serial) = dt_str.parse::<f64>() {
-                                match excel_serial_to_datetime(serial) {
-                                    Some(ndt) => serde_json::Value::String(
-                                        ndt.format("%Y-%m-%dT%H:%M:%S").to_string(),
-                                    ),
-                                    None => serde_json::Value::Null,
+                            let serial = dt.as_f64();
+                            match excel_serial_to_datetime(serial) {
+                                Some(ndt) => {
+                                    let date_str = ndt.format("%Y-%m-%dT%H:%M:%S").to_string();
+                                    serde_json::Value::String(date_str)
                                 }
-                            } else {
-                                serde_json::Value::Null
+                                None => {
+                                    tracing::warn!(
+                                        "Failed to convert Excel DateTime serial {} to NaiveDateTime",
+                                        serial
+                                    );
+                                    serde_json::Value::Null
+                                }
                             }
                         } else {
                             serde_json::Value::String(dt.to_string())
@@ -205,14 +208,17 @@ impl Iterator for ExcelActionIterator {
                         serde_json::Value::String(format!("{:?}", e))
                     }
                 }
+            } else if is_date_field {
+                serde_json::Value::Null
             } else {
-                if is_date_field {
-                    serde_json::Value::Null
-                } else {
-                    serde_json::Value::String(String::new())
-                }
+                serde_json::Value::String(String::new())
             };
-            record.insert(header.clone(), cell_value);
+            let normalized_header = if is_date_field {
+                "actionDate".to_string()
+            } else {
+                header.clone()
+            };
+            record.insert(normalized_header, cell_value);
         }
         self.row_num += 1;
         if !has_any_data {
@@ -221,24 +227,27 @@ impl Iterator for ExcelActionIterator {
         let json_value = serde_json::Value::Object(record.clone());
         let available_fields: Vec<String> = record.keys().cloned().collect();
         match serde_json::from_value::<ActionObject>(json_value.clone()) {
-            Ok(action_object) => Some(Ok(action_object)),
+            Ok(action_object) => {
+                if action_object.actiondate.is_none() {
+                    tracing::warn!(
+                        "Date field is None after deserialization. Available fields: {:?}",
+                        available_fields
+                    );
+                    if let Some(date_val) = record.get("actionDate") {
+                        tracing::warn!("Date value in JSON was: {:?}", date_val);
+                    }
+                }
+                Some(Ok(action_object))
+            }
             Err(e) => {
                 let json_str = serde_json::to_string(&json_value)
                     .unwrap_or_else(|_| "failed to serialize".to_string());
                 let error_str = e.to_string();
-                let field_info = if error_str.contains("missing field") {
-                    format!(
-                        "Available fields: [{}]. Error: {}",
-                        available_fields.join(", "),
-                        error_str
-                    )
-                } else {
-                    format!(
-                        "Available fields: [{}]. Error: {}",
-                        available_fields.join(", "),
-                        error_str
-                    )
-                };
+                let field_info = format!(
+                    "Available fields: [{}]. Error: {}",
+                    available_fields.join(", "),
+                    error_str
+                );
                 Some(Err(anyhow::anyhow!(
                     "failed to deserialize row {} in worksheet '{}' of excel file '{}': {} (data: {})",
                     row_num_for_error,
@@ -254,9 +263,9 @@ impl Iterator for ExcelActionIterator {
 
 impl Excel for Reader {
     fn try_excel_to_action_objects(path: &Path) -> anyhow::Result<Vec<ActionObject>> {
-        let mut iter = Self::excel_action_iter(path)?;
+        let iter = Self::excel_action_iter(path)?;
         let mut output = Vec::new();
-        while let Some(result) = iter.next() {
+        for result in iter {
             output.push(result?);
         }
         Ok(output)

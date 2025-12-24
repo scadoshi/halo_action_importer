@@ -26,7 +26,6 @@ impl ActionClient {
         endpoint.set_path("api/actions");
         let endpoint_str = endpoint.to_string();
         let wrapped_action_object = vec![action_object];
-        tracing::debug!("Sending action object POST for: {}", action_object_id);
         let request = self
             .http_client
             .post(endpoint)

@@ -28,7 +28,6 @@ impl ReportClient {
     }
 
     pub async fn get_existing_action_ids(&self) -> anyhow::Result<HashSet<String>> {
-        tracing::debug!("Fetching existing action IDs from report");
         let response = self
             .http_client
             .get(self.config.action_ids_resource.as_str())
