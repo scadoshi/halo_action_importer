@@ -79,10 +79,10 @@ The application will:
 To process files from a different directory:
 
 ```bash
-cargo run --release -- --input input1
+cargo run --release -- --input input/1
 ```
 
-This is useful for running multiple instances in parallel on different input directories. Each instance will process files from its specified directory.
+This is useful for running multiple instances in parallel on different input directories. You can organize files into subdirectories like `input/1/`, `input/2/`, etc., and run separate instances for each.
 
 ### Parse-Only Mode
 
@@ -137,11 +137,12 @@ cargo run --release -- --only-parse --reverse
 cargo run --release -- --half --reverse
 
 # Process custom directory with half mode
-cargo run --release -- --input input1 --half
+cargo run --release -- --input input/1 --half
 
-# Run multiple instances in parallel (different directories)
-cargo run --release -- --input input1 --half &
-cargo run --release -- --input input2 --half &
+# Run multiple instances in parallel (different subdirectories)
+cargo run --release -- --input input/1 &
+cargo run --release -- --input input/2 &
+cargo run --release -- --input input/3 &
 ```
 
 ## File Format
