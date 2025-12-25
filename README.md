@@ -101,6 +101,16 @@ This mode:
 - Uses reduced logging frequency (every 10,000 entries or 5 seconds)
 - Shows success message if all actions parse successfully
 
+### Batch Mode
+
+Post multiple actions per API request (default is 1):
+
+```bash
+cargo run --release -- --batch 10
+```
+
+Batch mode groups actions into batches of the specified size before posting to the API. This significantly improves throughput by reducing the number of API calls and network overhead.
+
 ### Reverse Mode
 
 Process files from bottom to top (useful for parallel execution):
@@ -139,10 +149,10 @@ cargo run --release -- --half --reverse
 # Process custom directory with half mode
 cargo run --release -- --input input/1 --half
 
-# Run multiple instances in parallel (different subdirectories)
-cargo run --release -- --input input/1 &
-cargo run --release -- --input input/2 &
-cargo run --release -- --input input/3 &
+# Run multiple instances in parallel (different subdirectories with batch mode)
+cargo run --release -- --input input/1 --batch 10 &
+cargo run --release -- --input input/2 --batch 10 &
+cargo run --release -- --input input/3 --batch 10 &
 ```
 
 ## File Format
@@ -195,7 +205,11 @@ Progress logs include:
 Skipped 1,234 entries (already exist)
 ```
 
-**Success Messages**: Each successful import is logged:
+**Success Messages**: Each successful import is logged. When using `--batch` mode with batch size > 1:
+```
+Success: imported batch of 10 actions
+```
+For batch size of 1 (default):
 ```
 Success: imported action ID: 12345 (ticket ID: 67890)
 ```
