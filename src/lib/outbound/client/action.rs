@@ -22,37 +22,45 @@ impl ActionClient {
         }
     }
 
-    pub async fn post_action_object(&self, action_object: ActionObject) -> anyhow::Result<()> {
+    pub async fn post_action_objects(
+        &self,
+        action_objects: Vec<ActionObject>,
+    ) -> anyhow::Result<()> {
+        if action_objects.is_empty() {
+            return Ok(());
+        }
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        let action_object_id = action_object.action_id().to_string();
+        let action_ids: Vec<String> = action_objects
+            .iter()
+            .map(|a| a.action_id().to_string())
+            .collect();
         let mut endpoint = self.config.base_resource_url.clone();
         endpoint.set_path("api/actions");
         let endpoint_str = endpoint.to_string();
-        let wrapped_action_object = vec![action_object.clone()];
         let mut auth_token = self
             .auth_client
             .get_valid_token()
             .await
             .context("Failed to get valid authentication token")?;
         for attempt in 0..2 {
-        let request = self
-            .http_client
+            let request = self
+                .http_client
                 .post(endpoint.clone())
                 .header("Authorization", &auth_token)
-            .header("Content-Type", "application/json; charset=utf-8")
-            .json(&wrapped_action_object);
+                .header("Content-Type", "application/json; charset=utf-8")
+                .json(&action_objects);
 
             let response = match request.send().await.with_context(|| {
                 format!(
-                    "failed to send POST request for action ID: {} to endpoint: {}",
-                    action_object_id, endpoint_str
+                    "failed to send POST request for action IDs: {:?} to endpoint: {}",
+                    action_ids, endpoint_str
                 )
             }) {
                 Ok(resp) => resp,
                 Err(e) => {
                     error!(
-                        "Failed to send POST request for action ID {}: {}",
-                        action_object_id, e
+                        "Failed to send POST request for action IDs {:?}: {}",
+                        action_ids, e
                     );
                     return Err(e);
                 }
@@ -60,10 +68,7 @@ impl ActionClient {
 
             let status = response.status();
             if status == reqwest::StatusCode::UNAUTHORIZED && attempt == 0 {
-                warn!(
-                    "Received 401 Unauthorized for action ID {}, refreshing token and retrying",
-                    action_object_id
-                );
+                warn!("Received 401 Unauthorized for batch, refreshing token and retrying");
                 auth_token = self
                     .auth_client
                     .get_valid_token()
@@ -73,31 +78,30 @@ impl ActionClient {
             }
 
             if !status.is_success() {
-            let error_text: String = response
-                .text()
-                .await
+                let error_text: String = response
+                    .text()
+                    .await
                     .with_context(|| {
                         format!(
-                            "failed to read error response body for action ID: {} (status: {})",
-                            action_object_id, status
+                            "failed to read error response body for action IDs: {:?} (status: {})",
+                            action_ids, status
                         )
                     })
-                .unwrap_or_else(|_| "failed to get error response".to_string());
+                    .unwrap_or_else(|_| "failed to get error response".to_string());
                 error!(
-                    "Action object POST failed for action ID {}: status {}, error: {}",
-                    action_object_id, status, error_text
+                    "Action object POST failed for batch: status {}, error: {}",
+                    status, error_text
                 );
-            anyhow::bail!(
-                    "Action object POST failed for action ID {}: status {}, error: {}",
-                action_object_id,
-                status,
-                error_text
-            )
-        }
+                anyhow::bail!(
+                    "Action object POST failed for batch: status {}, error: {}",
+                    status,
+                    error_text
+                )
+            }
 
             return Ok(());
         }
-        anyhow::bail!("Failed to post action object after retry")
+        anyhow::bail!("Failed to post action objects after retry")
     }
 }
 
@@ -119,7 +123,7 @@ mod tests {
             "rusty who",
             ActionId::new("897"),
         );
-        let response = action_client.post_action_object(action_object).await;
+        let response = action_client.post_action_objects(vec![action_object]).await;
         assert!(response.is_ok());
     }
 }
