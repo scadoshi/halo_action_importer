@@ -130,12 +130,18 @@ pub async fn process_csv_file(
                                     batch[0].ticket_id
                                 );
                             } else {
+                                let action_ids: Vec<String> = batch.iter().map(|a| a.action_id().to_string()).collect();
+                                let ticket_ids: Vec<String> = batch.iter().map(|a| a.ticket_id.to_string()).collect();
                                 info!(
-                                    "Success: imported batch of {} actions",
-                                    format_number(batch_count)
+                                    "Success: imported batch of {} actions | action IDs: {} | ticket IDs: {}",
+                                    format_number(batch_count),
+                                    action_ids.join(", "),
+                                    ticket_ids.join(", ")
                                 );
                             }
-                            row_times.push(batch_start.elapsed().as_secs_f64());
+                            let batch_time = batch_start.elapsed().as_secs_f64();
+                            let per_row_time = batch_time / batch_count as f64;
+                            row_times.push(per_row_time);
                             batch.clear();
                             batch_start = Instant::now();
                         }
@@ -223,12 +229,18 @@ pub async fn process_csv_file(
                             batch[0].ticket_id
                         );
                     } else {
+                        let action_ids: Vec<String> = batch.iter().map(|a| a.action_id().to_string()).collect();
+                        let ticket_ids: Vec<String> = batch.iter().map(|a| a.ticket_id.to_string()).collect();
                         info!(
-                            "Success: imported batch of {} actions",
-                            format_number(batch_count)
+                            "Success: imported batch of {} actions | action IDs: {} | ticket IDs: {}",
+                            format_number(batch_count),
+                            action_ids.join(", "),
+                            ticket_ids.join(", ")
                         );
                     }
-                    row_times.push(batch_start.elapsed().as_secs_f64());
+                    let batch_time = batch_start.elapsed().as_secs_f64();
+                    let per_row_time = batch_time / batch_count as f64;
+                    row_times.push(per_row_time);
                 }
                 Err(e) => {
                     let error_str = e.to_string();
@@ -400,12 +412,18 @@ pub async fn process_excel_file(
                                     batch[0].ticket_id
                                 );
                             } else {
+                                let action_ids: Vec<String> = batch.iter().map(|a| a.action_id().to_string()).collect();
+                                let ticket_ids: Vec<String> = batch.iter().map(|a| a.ticket_id.to_string()).collect();
                                 info!(
-                                    "Success: imported batch of {} actions",
-                                    format_number(batch_count)
+                                    "Success: imported batch of {} actions | action IDs: {} | ticket IDs: {}",
+                                    format_number(batch_count),
+                                    action_ids.join(", "),
+                                    ticket_ids.join(", ")
                                 );
                             }
-                            row_times.push(batch_start.elapsed().as_secs_f64());
+                            let batch_time = batch_start.elapsed().as_secs_f64();
+                            let per_row_time = batch_time / batch_count as f64;
+                            row_times.push(per_row_time);
                             batch.clear();
                             batch_start = Instant::now();
                         }
@@ -488,12 +506,18 @@ pub async fn process_excel_file(
                             batch[0].ticket_id
                         );
                     } else {
+                        let action_ids: Vec<String> = batch.iter().map(|a| a.action_id().to_string()).collect();
+                        let ticket_ids: Vec<String> = batch.iter().map(|a| a.ticket_id.to_string()).collect();
                         info!(
-                            "Success: imported batch of {} actions",
-                            format_number(batch_count)
+                            "Success: imported batch of {} actions | action IDs: {} | ticket IDs: {}",
+                            format_number(batch_count),
+                            action_ids.join(", "),
+                            ticket_ids.join(", ")
                         );
                     }
-                    row_times.push(batch_start.elapsed().as_secs_f64());
+                    let batch_time = batch_start.elapsed().as_secs_f64();
+                    let per_row_time = batch_time / batch_count as f64;
+                    row_times.push(per_row_time);
                 }
                 Err(e) => {
                     let error_str = e.to_string();
