@@ -21,6 +21,7 @@ struct ProcessConfig<'a> {
     total_sheets: usize,
     only_parse: bool,
     missing_tickets: &'a mut HashSet<u32>,
+    batch_size: usize,
 }
 
 pub async fn process_csv_file(
@@ -32,6 +33,7 @@ pub async fn process_csv_file(
     sheet_number: usize,
     total_sheets: usize,
     only_parse: bool,
+    batch_size: usize,
 ) -> anyhow::Result<ProcessingStats> {
     let mut missing_tickets: HashSet<u32> = HashSet::new();
     let config = ProcessConfig {
@@ -43,6 +45,7 @@ pub async fn process_csv_file(
         total_sheets,
         only_parse,
         missing_tickets: &mut missing_tickets,
+        batch_size,
     };
     let iter = <Reader as Csv>::csv_action_iter(file_path)?;
     let total_rows = iter.total_rows();
@@ -54,6 +57,8 @@ pub async fn process_csv_file(
     let mut row_times: Vec<f64> = Vec::new();
     let mut last_progress_log = Instant::now();
     let mut pending_skips = 0usize;
+    let mut batch: Vec<crate::domain::models::action_object::ActionObject> = Vec::new();
+    let mut batch_start = Instant::now();
     if let Some(total) = total_rows {
         info!(
             "Processing sheet {} of {}: CSV file '{}' ({} rows)",
@@ -69,7 +74,6 @@ pub async fn process_csv_file(
         );
     }
     for action_result in iter {
-        let row_start = Instant::now();
         let action = match action_result {
             Ok(a) => a,
             Err(e) => {
@@ -105,52 +109,78 @@ pub async fn process_csv_file(
             skipped += 1;
             pending_skips += 1;
         } else {
-            if pending_skips > 0 {
-                info!(
-                    "Skipped {} entries (already exist)",
-                    format_number(pending_skips)
-                );
-                pending_skips = 0;
-            }
-            if let Some(client) = config.action_client {
-                match client.post_action_object(action.clone()).await {
-                    Ok(_) => {
-                        imported += 1;
-                        info!(
-                            "Success: imported action ID: {} (ticket ID: {})",
-                            action_id, ticket_id
-                        );
-                        row_times.push(row_start.elapsed().as_secs_f64());
-                    }
-                    Err(e) => {
-                        let error_str = e.to_string();
-                        let is_not_found = error_str.contains("not found")
-                            || error_str.contains("Not Found")
-                            || error_str.contains("404")
-                            || error_str.contains("does not exist")
-                            || error_str.contains("doesn't exist");
-                        if is_not_found {
-                            config.missing_tickets.insert(ticket_id);
-                            warn!(
-                                "Ticket ID: {} not found - will skip future actions for this ticket",
-                                ticket_id
-                            );
+            batch.push(action.clone());
+            if batch.len() >= config.batch_size {
+                if pending_skips > 0 {
+                    info!(
+                        "Skipped {} entries (already exist)",
+                        format_number(pending_skips)
+                    );
+                    pending_skips = 0;
+                }
+                if let Some(client) = config.action_client {
+                    match client.post_action_objects(batch.clone()).await {
+                        Ok(_) => {
+                            let batch_count = batch.len();
+                            imported += batch_count;
+                            if config.batch_size == 1 {
+                                info!(
+                                    "Success: imported action ID: {} (ticket ID: {})",
+                                    batch[0].action_id(),
+                                    batch[0].ticket_id
+                                );
+                            } else {
+                                info!(
+                                    "Success: imported batch of {} actions",
+                                    format_number(batch_count)
+                                );
+                            }
+                            row_times.push(batch_start.elapsed().as_secs_f64());
+                            batch.clear();
+                            batch_start = Instant::now();
                         }
+                        Err(e) => {
+                            let error_str = e.to_string();
+                            for action in &batch {
+                                let action_id = action.action_id().to_string();
+                                let ticket_id = action.ticket_id;
+                                let is_not_found = error_str.contains("not found")
+                                    || error_str.contains("Not Found")
+                                    || error_str.contains("404")
+                                    || error_str.contains("does not exist")
+                                    || error_str.contains("doesn't exist");
+                                if is_not_found {
+                                    config.missing_tickets.insert(ticket_id);
+                                    warn!(
+                                        "Ticket ID: {} not found - will skip future actions for this ticket",
+                                        ticket_id
+                                    );
+                                }
+                                let error_msg = format!(
+                                    "Failed to import action ID: {} (ticket ID: {}): {}",
+                                    action_id, ticket_id, e
+                                );
+                                error!("{}", error_msg);
+                                failed.push((action_id, error_msg.clone()));
+                            }
+                            batch.clear();
+                            batch_start = Instant::now();
+                        }
+                    }
+                } else {
+                    for action in &batch {
+                        let action_id = action.action_id().to_string();
+                        let ticket_id = action.ticket_id;
                         let error_msg = format!(
-                            "Failed to import action ID: {} (ticket ID: {}): {}",
-                            action_id, ticket_id, e
+                            "Action client not available for action ID: {} (ticket ID: {})",
+                            action_id, ticket_id
                         );
                         error!("{}", error_msg);
                         failed.push((action_id, error_msg.clone()));
                     }
+                    batch.clear();
+                    batch_start = Instant::now();
                 }
-            } else {
-                let error_msg = format!(
-                    "Action client not available for action ID: {} (ticket ID: {})",
-                    action_id, ticket_id
-                );
-                error!("{}", error_msg);
-                failed.push((action_id, error_msg.clone()));
             }
         }
         let should_log_progress = if only_parse {
@@ -171,6 +201,72 @@ pub async fn process_csv_file(
                 row_times: &row_times,
             });
             last_progress_log = Instant::now();
+        }
+    }
+    if !batch.is_empty() {
+        if pending_skips > 0 {
+            info!(
+                "Skipped {} entries (already exist)",
+                format_number(pending_skips)
+            );
+            pending_skips = 0;
+        }
+        if let Some(client) = config.action_client {
+            match client.post_action_objects(batch.clone()).await {
+                Ok(_) => {
+                    let batch_count = batch.len();
+                    imported += batch_count;
+                    if config.batch_size == 1 {
+                        info!(
+                            "Success: imported action ID: {} (ticket ID: {})",
+                            batch[0].action_id(),
+                            batch[0].ticket_id
+                        );
+                    } else {
+                        info!(
+                            "Success: imported batch of {} actions",
+                            format_number(batch_count)
+                        );
+                    }
+                    row_times.push(batch_start.elapsed().as_secs_f64());
+                }
+                Err(e) => {
+                    let error_str = e.to_string();
+                    for action in &batch {
+                        let action_id = action.action_id().to_string();
+                        let ticket_id = action.ticket_id;
+                        let is_not_found = error_str.contains("not found")
+                            || error_str.contains("Not Found")
+                            || error_str.contains("404")
+                            || error_str.contains("does not exist")
+                            || error_str.contains("doesn't exist");
+                        if is_not_found {
+                            config.missing_tickets.insert(ticket_id);
+                            warn!(
+                                "Ticket ID: {} not found - will skip future actions for this ticket",
+                                ticket_id
+                            );
+                        }
+                        let error_msg = format!(
+                            "Failed to import action ID: {} (ticket ID: {}): {}",
+                            action_id, ticket_id, e
+                        );
+                        error!("{}", error_msg);
+                        failed.push((action_id, error_msg.clone()));
+                    }
+                }
+            }
+        } else {
+            for action in &batch {
+                let action_id = action.action_id().to_string();
+                let ticket_id = action.ticket_id;
+                let error_msg = format!(
+                    "Action client not available for action ID: {} (ticket ID: {})",
+                    action_id, ticket_id
+                );
+                error!("{}", error_msg);
+                failed.push((action_id, error_msg.clone()));
+            }
         }
     }
     if pending_skips > 0 {
@@ -209,6 +305,7 @@ pub async fn process_excel_file(
     sheet_number: usize,
     total_sheets: usize,
     only_parse: bool,
+    batch_size: usize,
 ) -> anyhow::Result<ProcessingStats> {
     let mut missing_tickets: HashSet<u32> = HashSet::new();
     let config = ProcessConfig {
@@ -223,6 +320,7 @@ pub async fn process_excel_file(
         total_sheets,
         only_parse,
         missing_tickets: &mut missing_tickets,
+        batch_size,
     };
     let iter = <Reader as Excel>::excel_action_iter(file_path)?;
     let total_rows = iter.total_rows();
@@ -235,6 +333,8 @@ pub async fn process_excel_file(
     let mut row_times: Vec<f64> = Vec::new();
     let mut last_progress_log = Instant::now();
     let mut pending_skips = 0usize;
+    let mut batch: Vec<crate::domain::models::action_object::ActionObject> = Vec::new();
+    let mut batch_start = Instant::now();
     info!(
         "Processing sheet {} of {}: Excel file '{}', sheet '{}' ({} rows)",
         config.sheet_number,
@@ -244,7 +344,6 @@ pub async fn process_excel_file(
         format_number(total_rows)
     );
     for action_result in iter {
-        let row_start = Instant::now();
         let action = match action_result {
             Ok(a) => a,
             Err(e) => {
@@ -280,25 +379,127 @@ pub async fn process_excel_file(
             skipped += 1;
             pending_skips += 1;
         } else {
-            if pending_skips > 0 {
-                info!(
-                    "Skipped {} entries (already exist)",
-                    format_number(pending_skips)
-                );
-                pending_skips = 0;
-            }
-            if let Some(client) = config.action_client {
-                match client.post_action_object(action.clone()).await {
-                    Ok(_) => {
-                        imported += 1;
-                        info!(
-                            "Success: imported action ID: {} (ticket ID: {})",
+            batch.push(action.clone());
+            if batch.len() >= config.batch_size {
+                if pending_skips > 0 {
+                    info!(
+                        "Skipped {} entries (already exist)",
+                        format_number(pending_skips)
+                    );
+                    pending_skips = 0;
+                }
+                if let Some(client) = config.action_client {
+                    match client.post_action_objects(batch.clone()).await {
+                        Ok(_) => {
+                            let batch_count = batch.len();
+                            imported += batch_count;
+                            if config.batch_size == 1 {
+                                info!(
+                                    "Success: imported action ID: {} (ticket ID: {})",
+                                    batch[0].action_id(),
+                                    batch[0].ticket_id
+                                );
+                            } else {
+                                info!(
+                                    "Success: imported batch of {} actions",
+                                    format_number(batch_count)
+                                );
+                            }
+                            row_times.push(batch_start.elapsed().as_secs_f64());
+                            batch.clear();
+                            batch_start = Instant::now();
+                        }
+                        Err(e) => {
+                            let error_str = e.to_string();
+                            for action in &batch {
+                                let action_id = action.action_id().to_string();
+                                let ticket_id = action.ticket_id;
+                                let is_not_found = error_str.contains("not found")
+                                    || error_str.contains("Not Found")
+                                    || error_str.contains("404")
+                                    || error_str.contains("does not exist")
+                                    || error_str.contains("doesn't exist");
+                                if is_not_found {
+                                    config.missing_tickets.insert(ticket_id);
+                                    warn!(
+                                        "Ticket ID: {} not found - will skip future actions for this ticket",
+                                        ticket_id
+                                    );
+                                }
+                                let error_msg = format!(
+                                    "Failed to import action ID: {} (ticket ID: {}): {}",
+                                    action_id, ticket_id, e
+                                );
+                                error!("{}", error_msg);
+                                failed.push((action_id, error_msg.clone()));
+                            }
+                            batch.clear();
+                            batch_start = Instant::now();
+                        }
+                    }
+                } else {
+                    for action in &batch {
+                        let action_id = action.action_id().to_string();
+                        let ticket_id = action.ticket_id;
+                        let error_msg = format!(
+                            "Action client not available for action ID: {} (ticket ID: {})",
                             action_id, ticket_id
                         );
-                        row_times.push(row_start.elapsed().as_secs_f64());
+                        error!("{}", error_msg);
+                        failed.push((action_id, error_msg.clone()));
                     }
-                    Err(e) => {
-                        let error_str = e.to_string();
+                    batch.clear();
+                    batch_start = Instant::now();
+                }
+            }
+        }
+        if last_progress_log.elapsed().as_secs() >= 60 || processed % 300 == 0 {
+            log_progress(ProgressParams {
+                sheet_number: config.sheet_number,
+                total_sheets: config.total_sheets,
+                file_name: config.file_name,
+                sheet_name: Some(&sheet_name),
+                processed,
+                total_rows: Some(total_rows),
+                imported,
+                skipped,
+                row_times: &row_times,
+            });
+            last_progress_log = Instant::now();
+        }
+    }
+    if !batch.is_empty() {
+        if pending_skips > 0 {
+            info!(
+                "Skipped {} entries (already exist)",
+                format_number(pending_skips)
+            );
+            pending_skips = 0;
+        }
+        if let Some(client) = config.action_client {
+            match client.post_action_objects(batch.clone()).await {
+                Ok(_) => {
+                    let batch_count = batch.len();
+                    imported += batch_count;
+                    if config.batch_size == 1 {
+                        info!(
+                            "Success: imported action ID: {} (ticket ID: {})",
+                            batch[0].action_id(),
+                            batch[0].ticket_id
+                        );
+                    } else {
+                        info!(
+                            "Success: imported batch of {} actions",
+                            format_number(batch_count)
+                        );
+                    }
+                    row_times.push(batch_start.elapsed().as_secs_f64());
+                }
+                Err(e) => {
+                    let error_str = e.to_string();
+                    for action in &batch {
+                        let action_id = action.action_id().to_string();
+                        let ticket_id = action.ticket_id;
                         let is_not_found = error_str.contains("not found")
                             || error_str.contains("Not Found")
                             || error_str.contains("404")
@@ -319,7 +520,11 @@ pub async fn process_excel_file(
                         failed.push((action_id, error_msg.clone()));
                     }
                 }
-            } else {
+            }
+        } else {
+            for action in &batch {
+                let action_id = action.action_id().to_string();
+                let ticket_id = action.ticket_id;
                 let error_msg = format!(
                     "Action client not available for action ID: {} (ticket ID: {})",
                     action_id, ticket_id
@@ -327,20 +532,6 @@ pub async fn process_excel_file(
                 error!("{}", error_msg);
                 failed.push((action_id, error_msg.clone()));
             }
-        }
-        if last_progress_log.elapsed().as_secs() >= 60 || processed % 300 == 0 {
-            log_progress(ProgressParams {
-                sheet_number: config.sheet_number,
-                total_sheets: config.total_sheets,
-                file_name: config.file_name,
-                sheet_name: Some(&sheet_name),
-                processed,
-                total_rows: Some(total_rows),
-                imported,
-                skipped,
-                row_times: &row_times,
-            });
-            last_progress_log = Instant::now();
         }
     }
     if pending_skips > 0 {
