@@ -25,12 +25,14 @@ fn format_number(n: usize) -> String {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let only_parse = args.iter().any(|arg| arg == "--only-parse" || arg == "--op");
+    let only_parse = args
+        .iter()
+        .any(|arg| arg == "--only-parse" || arg == "--op");
     let reverse = args.iter().any(|arg| arg == "--reverse" || arg == "--rev");
     let half = args.iter().any(|arg| arg == "--half");
     let input_path = args
         .iter()
-        .position(|arg| arg == "--path")
+        .position(|arg| arg == "--input")
         .and_then(|i| args.get(i + 1))
         .map(|s| s.as_str())
         .unwrap_or("input");
