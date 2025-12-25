@@ -36,6 +36,12 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|i| args.get(i + 1))
         .map(|s| s.as_str())
         .unwrap_or("input");
+    let batch_size = args
+        .iter()
+        .position(|arg| arg == "--batch")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(1);
     let config =
         Config::from_env().context("Failed to load configuration from environment variables")?;
 
@@ -50,6 +56,12 @@ async fn main() -> anyhow::Result<()> {
 
     let total_sheets = files_to_process.len();
     info!("Processing files from directory: {}", input_path);
+    if batch_size > 1 {
+        info!(
+            "Batch mode enabled: posting {} actions per request",
+            format_number(batch_size)
+        );
+    }
     if half {
         if reverse {
             info!(
@@ -107,6 +119,7 @@ async fn main() -> anyhow::Result<()> {
                     sheet_number,
                     total_sheets,
                     only_parse,
+                    batch_size,
                 )
                 .await
             } else if ext_lower == "xlsx" || ext_lower == "xls" {
@@ -118,6 +131,7 @@ async fn main() -> anyhow::Result<()> {
                     sheet_number,
                     total_sheets,
                     only_parse,
+                    batch_size,
                 )
                 .await
             } else {
