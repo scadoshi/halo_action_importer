@@ -130,8 +130,15 @@ pub async fn process_csv_file(
                                     batch[0].ticket_id
                                 );
                             } else {
-                                let action_ids: Vec<String> = batch.iter().map(|a| a.action_id().to_string()).collect();
-                                let ticket_ids: Vec<String> = batch.iter().map(|a| a.ticket_id.to_string()).collect();
+                                let action_ids: Vec<String> =
+                                    batch.iter().map(|a| a.action_id().to_string()).collect();
+                                let ticket_ids: Vec<String> = {
+                                    let mut ids: Vec<u32> =
+                                        batch.iter().map(|a| a.ticket_id).collect();
+                                    ids.sort_unstable();
+                                    ids.dedup();
+                                    ids.iter().map(|id| id.to_string()).collect()
+                                };
                                 info!(
                                     "Success: imported batch of {} actions | action IDs: {} | ticket IDs: {}",
                                     format_number(batch_count),
@@ -229,8 +236,14 @@ pub async fn process_csv_file(
                             batch[0].ticket_id
                         );
                     } else {
-                        let action_ids: Vec<String> = batch.iter().map(|a| a.action_id().to_string()).collect();
-                        let ticket_ids: Vec<String> = batch.iter().map(|a| a.ticket_id.to_string()).collect();
+                        let action_ids: Vec<String> =
+                            batch.iter().map(|a| a.action_id().to_string()).collect();
+                        let ticket_ids: Vec<String> = {
+                            let mut ids: Vec<u32> = batch.iter().map(|a| a.ticket_id).collect();
+                            ids.sort_unstable();
+                            ids.dedup();
+                            ids.iter().map(|id| id.to_string()).collect()
+                        };
                         info!(
                             "Success: imported batch of {} actions | action IDs: {} | ticket IDs: {}",
                             format_number(batch_count),
@@ -412,8 +425,15 @@ pub async fn process_excel_file(
                                     batch[0].ticket_id
                                 );
                             } else {
-                                let action_ids: Vec<String> = batch.iter().map(|a| a.action_id().to_string()).collect();
-                                let ticket_ids: Vec<String> = batch.iter().map(|a| a.ticket_id.to_string()).collect();
+                                let action_ids: Vec<String> =
+                                    batch.iter().map(|a| a.action_id().to_string()).collect();
+                                let ticket_ids: Vec<String> = {
+                                    let mut ids: Vec<u32> =
+                                        batch.iter().map(|a| a.ticket_id).collect();
+                                    ids.sort_unstable();
+                                    ids.dedup();
+                                    ids.iter().map(|id| id.to_string()).collect()
+                                };
                                 info!(
                                     "Success: imported batch of {} actions | action IDs: {} | ticket IDs: {}",
                                     format_number(batch_count),
@@ -506,8 +526,14 @@ pub async fn process_excel_file(
                             batch[0].ticket_id
                         );
                     } else {
-                        let action_ids: Vec<String> = batch.iter().map(|a| a.action_id().to_string()).collect();
-                        let ticket_ids: Vec<String> = batch.iter().map(|a| a.ticket_id.to_string()).collect();
+                        let action_ids: Vec<String> =
+                            batch.iter().map(|a| a.action_id().to_string()).collect();
+                        let ticket_ids: Vec<String> = {
+                            let mut ids: Vec<u32> = batch.iter().map(|a| a.ticket_id).collect();
+                            ids.sort_unstable();
+                            ids.dedup();
+                            ids.iter().map(|id| id.to_string()).collect()
+                        };
                         info!(
                             "Success: imported batch of {} actions | action IDs: {} | ticket IDs: {}",
                             format_number(batch_count),

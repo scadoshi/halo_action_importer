@@ -207,8 +207,10 @@ Skipped 1,234 entries (already exist)
 
 **Success Messages**: Each successful import is logged. When using `--batch` mode with batch size > 1:
 ```
-Success: imported batch of 10 actions | action IDs: 12345, 12346, 12347 | ticket IDs: 67890, 67891, 67892
+Success: imported batch of 10 actions | action IDs: 12345, 12346, 12347 | ticket IDs: 67890, 67891
 ```
+Note: Ticket IDs are deduplicated since multiple actions can belong to the same ticket.
+
 For batch size of 1 (default):
 ```
 Success: imported action ID: 12345 (ticket ID: 67890)
