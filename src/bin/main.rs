@@ -22,13 +22,18 @@ fn format_number(n: usize) -> String {
     result
 }
 
-const INPUT_PATH: &str = "input";
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let only_parse = std::env::args().any(|arg| arg == "--only-parse" || arg == "--op");
-    let reverse = std::env::args().any(|arg| arg == "--reverse" || arg == "--rev");
-    let half = std::env::args().any(|arg| arg == "--half");
+    let args: Vec<String> = std::env::args().collect();
+    let only_parse = args.iter().any(|arg| arg == "--only-parse" || arg == "--op");
+    let reverse = args.iter().any(|arg| arg == "--reverse" || arg == "--rev");
+    let half = args.iter().any(|arg| arg == "--half");
+    let input_path = args
+        .iter()
+        .position(|arg| arg == "--path")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| s.as_str())
+        .unwrap_or("input");
     let config =
         Config::from_env().context("Failed to load configuration from environment variables")?;
 
@@ -39,9 +44,10 @@ async fn main() -> anyhow::Result<()> {
         action_client,
         files_to_process,
         auth_client: _,
-    } = setup::setup(&config, only_parse, reverse, half, INPUT_PATH).await?;
+    } = setup::setup(&config, only_parse, reverse, half, input_path).await?;
 
     let total_sheets = files_to_process.len();
+    info!("Processing files from directory: {}", input_path);
     if half {
         if reverse {
             info!(

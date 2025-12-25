@@ -35,12 +35,12 @@ impl ActionClient {
             .await
             .context("Failed to get valid authentication token")?;
         for attempt in 0..2 {
-            let request = self
-                .http_client
+        let request = self
+            .http_client
                 .post(endpoint.clone())
                 .header("Authorization", &auth_token)
-                .header("Content-Type", "application/json; charset=utf-8")
-                .json(&wrapped_action_object);
+            .header("Content-Type", "application/json; charset=utf-8")
+            .json(&wrapped_action_object);
 
             let response = match request.send().await.with_context(|| {
                 format!(
@@ -73,27 +73,27 @@ impl ActionClient {
             }
 
             if !status.is_success() {
-                let error_text: String = response
-                    .text()
-                    .await
+            let error_text: String = response
+                .text()
+                .await
                     .with_context(|| {
                         format!(
                             "failed to read error response body for action ID: {} (status: {})",
                             action_object_id, status
                         )
                     })
-                    .unwrap_or_else(|_| "failed to get error response".to_string());
+                .unwrap_or_else(|_| "failed to get error response".to_string());
                 error!(
                     "Action object POST failed for action ID {}: status {}, error: {}",
                     action_object_id, status, error_text
                 );
-                anyhow::bail!(
+            anyhow::bail!(
                     "Action object POST failed for action ID {}: status {}, error: {}",
-                    action_object_id,
-                    status,
-                    error_text
-                )
-            }
+                action_object_id,
+                status,
+                error_text
+            )
+        }
 
             return Ok(());
         }

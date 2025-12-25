@@ -74,6 +74,16 @@ The application will:
 5. Import new actions with a 500ms delay between API calls
 6. Generate a log file in the `log/` directory with a UTC timestamp
 
+### Custom Input Directory
+
+To process files from a different directory:
+
+```bash
+cargo run --release -- --path input1
+```
+
+This is useful for running multiple instances in parallel on different input directories. Each instance will process files from its specified path.
+
 ### Parse-Only Mode
 
 To validate files without making API calls:
@@ -125,6 +135,13 @@ cargo run --release -- --only-parse --reverse
 
 # Import bottom half in reverse
 cargo run --release -- --half --reverse
+
+# Process custom directory with half mode
+cargo run --release -- --path input1 --half
+
+# Run multiple instances in parallel (different directories)
+cargo run --release -- --path input1 --half &
+cargo run --release -- --path input2 --half &
 ```
 
 ## File Format
