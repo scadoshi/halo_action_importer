@@ -43,7 +43,7 @@ CLIENT_ID = client-id-goes-here
 CLIENT_SECRET = super-secret-client-secret-goes-here
 
 # Actions
-ACTION_IDS_RESOURCE_PATH = /api/ReportData/whatever-this-happens-to-be
+ACTION_IDS_RESOURCE_PATH = /api/ReportData/uuid-1,/api/ReportData/uuid-2,/api/ReportData/uuid-3
 ACTION_ID_CUSTOM_FIELD_ID = 123
 ```
 
@@ -52,7 +52,7 @@ ACTION_ID_CUSTOM_FIELD_ID = 123
 - `BASE_RESOURCE_URL` - Base URL of your Halo instance (include trailing slash)
 - `CLIENT_ID` - OAuth2 client ID for API authentication
 - `CLIENT_SECRET` - OAuth2 client secret for API authentication
-- `ACTION_IDS_RESOURCE_PATH` - API path to the report that returns existing action IDs (e.g., `/api/ReportData/YourReportName`)
+- `ACTION_IDS_RESOURCE_PATH` - API path(s) to report(s) that return existing action IDs. Can be a single path or comma-separated list of multiple paths (e.g., `/api/ReportData/uuid-1,/api/ReportData/uuid-2`). **CRITICAL:** For large datasets (3M+ IDs), use multiple reports to avoid timeouts. See `sql/` directory for query templates.
 - `ACTION_ID_CUSTOM_FIELD_ID` - Custom field ID used to store the unique action identifier (numeric value)
 - `LOG_LEVEL` - Logging level (trace, debug, info, warn, error). Defaults to `info` if not specified.
 
@@ -68,7 +68,7 @@ cargo run --release
 
 The application will:
 1. Authenticate with the Halo API
-2. Fetch existing action IDs from the configured report
+2. Fetch existing action IDs from the configured report(s)
 3. Process all CSV and Excel files in the `input/` directory
 4. Skip actions that already exist
 5. Import new actions with a 500ms delay between API calls
@@ -95,11 +95,18 @@ cargo run --release -- --op
 ```
 
 This mode:
+- Authenticates with the Halo API
+- Fetches and parses existing action IDs from all configured reports (tests report connectivity)
 - Parses all files and validates data structure
-- Shows which actions would be imported or skipped
-- Does not make any API calls
+- Shows which actions would be imported or skipped (based on fetched IDs)
+- Does not make any import API calls
 - Uses reduced logging frequency (every 10,000 entries or 5 seconds)
 - Shows success message if all actions parse successfully
+
+This is useful for:
+- Testing report configuration and connectivity
+- Validating file formats before running a full import
+- Verifying that existing ID reports are working correctly
 
 ### Batch Mode
 
