@@ -77,9 +77,6 @@ pub async fn setup_auth_and_existing_ids(
     config: &Config,
     only_parse: bool,
 ) -> anyhow::Result<(Option<Arc<AuthClient>>, HashSet<String>)> {
-    if only_parse {
-        return Ok((None, HashSet::new()));
-    }
     let auth_client = Arc::new(AuthClient::new(config.clone()));
     let _token = auth_client
         .get_valid_token()
@@ -95,6 +92,12 @@ pub async fn setup_auth_and_existing_ids(
         "Found {} existing action IDs to skip",
         format_number(ids.len())
     );
+    if only_parse {
+        info!(
+            "Parse-only mode: existing IDs fetched successfully, will skip API calls for imports"
+        );
+        return Ok((None, ids));
+    }
     Ok((Some(auth_client), ids))
 }
 
@@ -136,7 +139,9 @@ pub async fn setup(
     input_path: &str,
 ) -> anyhow::Result<SetupResult> {
     let (auth_client, existing_ids) = setup_auth_and_existing_ids(config, only_parse).await?;
-    let action_client = auth_client.as_ref().map(|auth| ActionClient::new(config.clone(), auth.clone()));
+    let action_client = auth_client
+        .as_ref()
+        .map(|auth| ActionClient::new(config.clone(), auth.clone()));
     let mut files_to_process = discover_files(input_path)?;
     if half {
         let total = files_to_process.len();

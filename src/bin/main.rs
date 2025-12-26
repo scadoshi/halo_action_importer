@@ -80,12 +80,12 @@ async fn main() -> anyhow::Result<()> {
     if only_parse {
         if reverse {
             info!(
-                "Starting parse-only import of {} file(s) in reverse order",
+                "Starting parse-only import of {} file(s) in reverse order (will test report fetching + file parsing)",
                 format_number(total_sheets)
             );
         } else {
             info!(
-                "Starting parse-only import of {} file(s)",
+                "Starting parse-only import of {} file(s) (will test report fetching + file parsing)",
                 format_number(total_sheets)
             );
         }
