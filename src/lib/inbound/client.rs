@@ -21,8 +21,10 @@ fn format_number(n: usize) -> String {
 
 #[derive(Debug, Deserialize)]
 struct ReportResponse {
-    #[serde(rename = "existingActionIds")]
-    existing_action_ids: String,
+    #[serde(rename = "group_num")]
+    _group_num: String,
+    #[serde(rename = "action_ids")]
+    action_ids: String,
 }
 
 #[derive(Debug, Clone)]
@@ -42,83 +44,113 @@ impl ReportClient {
     }
 
     pub async fn get_existing_action_ids(&self) -> anyhow::Result<HashSet<String>> {
-        let mut auth_token = self
-            .auth_client
-            .get_valid_token()
-            .await
-            .context("Failed to get valid authentication token")?;
-        for attempt in 0..2 {
-            let response = self
-                .http_client
-                .get(self.config.action_ids_resource.as_str())
-                .header("Authorization", &auth_token)
-                .header("Content-Type", "application/json; charset=utf-8")
-                .send()
-                .await
-                .context("failed to send report request")?;
+        let mut all_existing_ids = HashSet::new();
+        let total_reports = self.config.action_ids_resources.len();
+        tracing::info!(
+            "Fetching existing action IDs from {} report(s)",
+            total_reports
+        );
 
-            let status = response.status();
-            if status == reqwest::StatusCode::UNAUTHORIZED && attempt == 0 {
-                warn!(
-                    "Received 401 Unauthorized for report request, refreshing token and retrying"
-                );
-                auth_token = self
-                    .auth_client
-                    .get_valid_token()
-                    .await
-                    .context("Failed to refresh authentication token after 401")?;
-                continue;
-            }
+        for (idx, report_url) in self.config.action_ids_resources.iter().enumerate() {
+            tracing::info!(
+                "Fetching report {}/{}: {}",
+                idx + 1,
+                total_reports,
+                report_url
+            );
 
-            if !status.is_success() {
-                let error_text = response
-                    .text()
-                    .await
-                    .unwrap_or_else(|_| "failed to get error response".to_string());
-                error!(
-                    "Report request failed: status {}, error: {}",
-                    status, error_text
-                );
-                anyhow::bail!(
-                    "Report request failed: status {}, error: {}",
-                    status,
-                    error_text
-                );
-            }
-            let report_data: Vec<ReportResponse> = match response
-                .json()
+            let mut auth_token = self
+                .auth_client
+                .get_valid_token()
                 .await
-                .context("failed to parse report response")
-            {
-                Ok(data) => data,
-                Err(e) => {
-                    error!("Failed to parse report response: {}", e);
-                    return Err(e);
+                .context("Failed to get valid authentication token")?;
+
+            for attempt in 0..2 {
+                let response = self
+                    .http_client
+                    .get(report_url.as_str())
+                    .header("Authorization", &auth_token)
+                    .header("Content-Type", "application/json; charset=utf-8")
+                    .send()
+                    .await
+                    .context("failed to send report request")?;
+
+                let status = response.status();
+                if status == reqwest::StatusCode::UNAUTHORIZED && attempt == 0 {
+                    warn!(
+                        "Received 401 Unauthorized for report request, refreshing token and retrying"
+                    );
+                    auth_token = self
+                        .auth_client
+                        .get_valid_token()
+                        .await
+                        .context("Failed to refresh authentication token after 401")?;
+                    continue;
                 }
-            };
 
-            let existing_ids_str = match report_data.first() {
-                Some(data) => data.existing_action_ids.clone(),
-                None => {
+                if !status.is_success() {
+                    let error_text = response
+                        .text()
+                        .await
+                        .unwrap_or_else(|_| "failed to get error response".to_string());
+                    error!(
+                        "Report request failed: status {}, error: {}",
+                        status, error_text
+                    );
+                    anyhow::bail!(
+                        "Report request failed: status {}, error: {}",
+                        status,
+                        error_text
+                    );
+                }
+
+                let report_data: Vec<ReportResponse> = match response
+                    .json()
+                    .await
+                    .context("failed to parse report response")
+                {
+                    Ok(data) => data,
+                    Err(e) => {
+                        error!("Failed to parse report response: {}", e);
+                        return Err(e);
+                    }
+                };
+
+                if report_data.is_empty() {
                     error!("Report response is empty");
                     anyhow::bail!("Report response is empty");
                 }
-            };
 
-            let mut existing_ids = HashSet::new();
-            for id_str in existing_ids_str.split(',') {
-                let id_str = id_str.trim();
-                if !id_str.is_empty() {
-                    existing_ids.insert(id_str.to_string());
+                for row in &report_data {
+                    for id_str in row.action_ids.split(',') {
+                        let id_str = id_str.trim();
+                        if !id_str.is_empty() {
+                            all_existing_ids.insert(id_str.to_string());
+                        }
+                    }
                 }
-            }
 
-            tracing::info!(
-                "Found {} existing action IDs",
-                format_number(existing_ids.len())
-            );
-            return Ok(existing_ids);
+                tracing::info!(
+                    "Report {}/{} complete: {} IDs in this report, {} total IDs so far",
+                    idx + 1,
+                    total_reports,
+                    report_data.iter().fold(0, |acc, row| {
+                        acc + row
+                            .action_ids
+                            .split(',')
+                            .filter(|s| !s.trim().is_empty())
+                            .count()
+                    }),
+                    format_number(all_existing_ids.len())
+                );
+                break;
+            }
         }
-        anyhow::bail!("Failed to get existing action IDs after retry")
+
+        tracing::info!(
+            "Completed fetching all reports: {} total existing action IDs",
+            format_number(all_existing_ids.len())
+        );
+        Ok(all_existing_ids)
     }
 }

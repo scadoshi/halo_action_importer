@@ -8,7 +8,7 @@ pub struct Config {
     pub token_url: Url,
     pub client_id: String,
     pub client_secret: String,
-    pub action_ids_resource: Url,
+    pub action_ids_resources: Vec<Url>,
     pub action_id_custom_field_id: u32,
     pub log_level: Level,
 }
@@ -49,14 +49,21 @@ impl Config {
                 CLIENT_SECRET_KEY
             )
         })?;
-        let action_ids_path = std::env::var(ACTION_IDS_RESOURCE_PATH_KEY).with_context(|| {
+        let action_ids_paths = std::env::var(ACTION_IDS_RESOURCE_PATH_KEY).with_context(|| {
             format!(
                 "missing required environment variable: {}",
                 ACTION_IDS_RESOURCE_PATH_KEY
             )
         })?;
-        let mut action_ids_resource = base_resource_url.clone();
-        action_ids_resource.set_path(action_ids_path.as_str());
+        let action_ids_resources: Vec<Url> = action_ids_paths
+            .split(',')
+            .map(|path| {
+                let path = path.trim();
+                let mut url = base_resource_url.clone();
+                url.set_path(path);
+                url
+            })
+            .collect();
         let action_id_custom_field_id_str = std::env::var(ACTION_ID_CUSTOM_FIELD_ID_KEY)
             .with_context(|| {
                 format!(
@@ -94,7 +101,7 @@ impl Config {
             token_url,
             client_id,
             client_secret,
-            action_ids_resource,
+            action_ids_resources,
             action_id_custom_field_id,
             log_level,
         })
