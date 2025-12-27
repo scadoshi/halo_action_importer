@@ -120,6 +120,8 @@ async fn main() -> anyhow::Result<()> {
                     total_sheets,
                     only_parse,
                     batch_size,
+                    half,
+                    reverse,
                 )
                 .await
             } else if ext_lower == "xlsx" || ext_lower == "xls" {
@@ -132,6 +134,8 @@ async fn main() -> anyhow::Result<()> {
                     total_sheets,
                     only_parse,
                     batch_size,
+                    half,
+                    reverse,
                 )
                 .await
             } else {

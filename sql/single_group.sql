@@ -1,6 +1,6 @@
 --dynamic
 
-declare @num_groups int = 10;
+declare @num_groups int = 20;
 declare @target_group int = 1;
 
 with stats as (

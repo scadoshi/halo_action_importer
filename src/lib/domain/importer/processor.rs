@@ -22,6 +22,8 @@ struct ProcessConfig<'a> {
     only_parse: bool,
     missing_tickets: &'a mut HashSet<u32>,
     batch_size: usize,
+    half: bool,
+    reverse: bool,
 }
 
 pub async fn process_csv_file(
@@ -34,6 +36,8 @@ pub async fn process_csv_file(
     total_sheets: usize,
     only_parse: bool,
     batch_size: usize,
+    half: bool,
+    reverse: bool,
 ) -> anyhow::Result<ProcessingStats> {
     let mut missing_tickets: HashSet<u32> = HashSet::new();
     let config = ProcessConfig {
@@ -46,9 +50,43 @@ pub async fn process_csv_file(
         only_parse,
         missing_tickets: &mut missing_tickets,
         batch_size,
+        half,
+        reverse,
     };
     let iter = <Reader as Csv>::csv_action_iter(file_path)?;
     let total_rows = iter.total_rows();
+    
+    // Collect all rows first so we can apply half/reverse logic
+    let all_rows_result: Result<Vec<_>, _> = iter.collect();
+    let mut all_rows = all_rows_result?;
+    let original_total = all_rows.len();
+    
+    // Apply half/reverse logic to the row collection
+    if config.half {
+        let half_count = original_total / 2;
+        if config.reverse {
+            all_rows = all_rows.into_iter().skip(half_count).collect();
+            info!(
+                "Half mode (bottom half): processing {} of {} rows",
+                format_number(all_rows.len()),
+                format_number(original_total)
+            );
+        } else {
+            all_rows.truncate(half_count);
+            info!(
+                "Half mode (top half): processing {} of {} rows",
+                format_number(all_rows.len()),
+                format_number(original_total)
+            );
+        }
+    } else if config.reverse {
+        all_rows.reverse();
+        info!(
+            "Reverse mode: processing {} rows in reverse order",
+            format_number(all_rows.len())
+        );
+    }
+    
     let mut processed = 0;
     let mut imported = 0;
     let mut skipped = 0;
@@ -73,26 +111,7 @@ pub async fn process_csv_file(
             config.sheet_number, config.total_sheets, config.file_name
         );
     }
-    for action_result in iter {
-        let action = match action_result {
-            Ok(a) => a,
-            Err(e) => {
-                if pending_skips > 0 {
-                    info!(
-                        "Skipped {} entries (already exist)",
-                        format_number(pending_skips)
-                    );
-                    pending_skips = 0;
-                }
-                let error_msg = format!(
-                    "Failed to deserialize row in CSV file '{}': {}",
-                    config.file_name, e
-                );
-                error!("{}", error_msg);
-                failed.push(("unknown".to_string(), error_msg.clone()));
-                continue;
-            }
-        };
+    for action in all_rows {
         processed += 1;
         let action_id = action.action_id().to_string();
         let ticket_id = action.ticket_id;
@@ -331,6 +350,8 @@ pub async fn process_excel_file(
     total_sheets: usize,
     only_parse: bool,
     batch_size: usize,
+    half: bool,
+    reverse: bool,
 ) -> anyhow::Result<ProcessingStats> {
     let mut missing_tickets: HashSet<u32> = HashSet::new();
     let config = ProcessConfig {
@@ -346,10 +367,44 @@ pub async fn process_excel_file(
         only_parse,
         missing_tickets: &mut missing_tickets,
         batch_size,
+        half,
+        reverse,
     };
     let iter = <Reader as Excel>::excel_action_iter(file_path)?;
     let total_rows = iter.total_rows();
     let sheet_name = iter.sheet_name().to_string();
+    
+    // Collect all rows first so we can apply half/reverse logic
+    let all_rows_result: Result<Vec<_>, _> = iter.collect();
+    let mut all_rows = all_rows_result?;
+    let original_total = all_rows.len();
+    
+    // Apply half/reverse logic to the row collection
+    if config.half {
+        let half_count = original_total / 2;
+        if config.reverse {
+            all_rows = all_rows.into_iter().skip(half_count).collect();
+            info!(
+                "Half mode (bottom half): processing {} of {} rows",
+                format_number(all_rows.len()),
+                format_number(original_total)
+            );
+        } else {
+            all_rows.truncate(half_count);
+            info!(
+                "Half mode (top half): processing {} of {} rows",
+                format_number(all_rows.len()),
+                format_number(original_total)
+            );
+        }
+    } else if config.reverse {
+        all_rows.reverse();
+        info!(
+            "Reverse mode: processing {} rows in reverse order",
+            format_number(all_rows.len())
+        );
+    }
+    
     let mut processed = 0;
     let mut imported = 0;
     let mut skipped = 0;
@@ -368,26 +423,7 @@ pub async fn process_excel_file(
         sheet_name,
         format_number(total_rows)
     );
-    for action_result in iter {
-        let action = match action_result {
-            Ok(a) => a,
-            Err(e) => {
-                if pending_skips > 0 {
-                    info!(
-                        "Skipped {} entries (already exist)",
-                        format_number(pending_skips)
-                    );
-                    pending_skips = 0;
-                }
-                let error_msg = format!(
-                    "Failed to deserialize row in Excel file '{}', sheet '{}': {}",
-                    config.file_name, sheet_name, e
-                );
-                error!("{}", error_msg);
-                failed.push(("unknown".to_string(), error_msg.clone()));
-                continue;
-            }
-        };
+    for action in all_rows {
         processed += 1;
         let action_id = action.action_id().to_string();
         let ticket_id = action.ticket_id;
