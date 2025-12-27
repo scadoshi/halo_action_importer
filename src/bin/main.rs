@@ -28,8 +28,6 @@ async fn main() -> anyhow::Result<()> {
     let only_parse = args
         .iter()
         .any(|arg| arg == "--only-parse" || arg == "--op");
-    let reverse = args.iter().any(|arg| arg == "--reverse" || arg == "--rev");
-    let half = args.iter().any(|arg| arg == "--half");
     let input_path = args
         .iter()
         .position(|arg| arg == "--input")
@@ -52,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
         action_client,
         files_to_process,
         auth_client: _,
-    } = setup::setup(&config, only_parse, reverse, half, input_path).await?;
+    } = setup::setup(&config, only_parse, input_path).await?;
 
     let total_sheets = files_to_process.len();
     info!("Processing files from directory: {}", input_path);
@@ -62,36 +60,9 @@ async fn main() -> anyhow::Result<()> {
             format_number(batch_size)
         );
     }
-    if half {
-        if reverse {
-            info!(
-                "Running in half mode (bottom half) with reverse: processing {} file(s) from bottom",
-                format_number(total_sheets)
-            );
-        } else {
-            info!(
-                "Running in half mode (top half): processing {} file(s) from top",
-                format_number(total_sheets)
-            );
-        }
-    } else if reverse {
-        info!("Running in reverse mode: processing files from bottom to top");
-    }
     if only_parse {
-        if reverse {
-            info!(
-                "Starting parse-only import of {} file(s) in reverse order (will test report fetching + file parsing)",
-                format_number(total_sheets)
-            );
-        } else {
-            info!(
-                "Starting parse-only import of {} file(s) (will test report fetching + file parsing)",
-                format_number(total_sheets)
-            );
-        }
-    } else if reverse {
         info!(
-            "Starting import of {} file(s) in reverse order",
+            "Starting parse-only import of {} file(s) (will test report fetching + file parsing)",
             format_number(total_sheets)
         );
     } else {
@@ -120,8 +91,6 @@ async fn main() -> anyhow::Result<()> {
                     total_sheets,
                     only_parse,
                     batch_size,
-                    half,
-                    reverse,
                 )
                 .await
             } else if ext_lower == "xlsx" || ext_lower == "xls" {
@@ -134,8 +103,6 @@ async fn main() -> anyhow::Result<()> {
                     total_sheets,
                     only_parse,
                     batch_size,
-                    half,
-                    reverse,
                 )
                 .await
             } else {

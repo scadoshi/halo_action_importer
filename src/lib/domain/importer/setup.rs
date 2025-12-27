@@ -134,31 +134,15 @@ pub fn discover_files(input_path: &str) -> anyhow::Result<Vec<(PathBuf, String)>
 pub async fn setup(
     config: &Config,
     only_parse: bool,
-    reverse: bool,
-    half: bool,
     input_path: &str,
 ) -> anyhow::Result<SetupResult> {
     // Check for files FIRST before doing expensive ID fetching
-    let mut files_to_process = discover_files(input_path)?;
+    let files_to_process = discover_files(input_path)?;
     if files_to_process.is_empty() {
         anyhow::bail!(
             "No CSV or Excel files found in input directory: {}. Nothing to process.",
             input_path
         );
-    }
-    
-    // Apply half/reverse filters to file list
-    if half {
-        let total = files_to_process.len();
-        let half_count = total / 2;
-        if reverse {
-            files_to_process.reverse();
-            files_to_process.truncate(half_count);
-        } else {
-            files_to_process.truncate(half_count);
-        }
-    } else if reverse {
-        files_to_process.reverse();
     }
     
     // Now fetch existing IDs (this can take a long time)

@@ -12,8 +12,7 @@ A Rust application for bulk importing actions into Halo. Processes CSV and Excel
 - Comprehensive logging with configurable log levels and timestamps
 - Performance statistics (runtime, entries per minute, time per entry, estimated time remaining)
 - Parse-only mode for validation without API calls
-- Reverse mode for processing files from bottom to top
-- Half mode for processing only half the files (useful for parallel execution)
+- Custom input directory support for parallel execution
 - Batched skip messages to reduce log clutter
 - Progress tracking with configurable update frequencies
 - Error handling that continues processing on failures
@@ -118,49 +117,18 @@ cargo run --release -- --batch 10
 
 Batch mode groups actions into batches of the specified size before posting to the API. This significantly improves throughput by reducing the number of API calls and network overhead.
 
-### Reverse Mode
+### Parallel Execution
 
-Process files from bottom to top (useful for parallel execution):
-
-```bash
-cargo run --release -- --reverse
-# or use short form
-cargo run --release -- --rev
-```
-
-### Half Mode
-
-Process only half the files (combine with `--reverse` for bottom half):
+You can run multiple instances on different input directories:
 
 ```bash
-# Process top half
-cargo run --release -- --half
-
-# Process bottom half
-cargo run --release -- --half --reverse
-```
-
-This is useful for running two instances in parallel - one processing the top half, one processing the bottom half.
-
-### Combined Modes
-
-You can combine flags:
-
-```bash
-# Parse-only mode in reverse
-cargo run --release -- --only-parse --reverse
-
-# Import bottom half in reverse
-cargo run --release -- --half --reverse
-
-# Process custom directory with half mode
-cargo run --release -- --input input/1 --half
-
 # Run multiple instances in parallel (different subdirectories with batch mode)
 cargo run --release -- --input input/1 --batch 10 &
 cargo run --release -- --input input/2 --batch 10 &
 cargo run --release -- --input input/3 --batch 10 &
 ```
+
+Simply split your files into separate directories and run one instance per directory.
 
 ## File Format
 
