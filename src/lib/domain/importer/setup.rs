@@ -138,11 +138,16 @@ pub async fn setup(
     half: bool,
     input_path: &str,
 ) -> anyhow::Result<SetupResult> {
-    let (auth_client, existing_ids) = setup_auth_and_existing_ids(config, only_parse).await?;
-    let action_client = auth_client
-        .as_ref()
-        .map(|auth| ActionClient::new(config.clone(), auth.clone()));
+    // Check for files FIRST before doing expensive ID fetching
     let mut files_to_process = discover_files(input_path)?;
+    if files_to_process.is_empty() {
+        anyhow::bail!(
+            "No CSV or Excel files found in input directory: {}. Nothing to process.",
+            input_path
+        );
+    }
+    
+    // Apply half/reverse filters to file list
     if half {
         let total = files_to_process.len();
         let half_count = total / 2;
@@ -155,6 +160,13 @@ pub async fn setup(
     } else if reverse {
         files_to_process.reverse();
     }
+    
+    // Now fetch existing IDs (this can take a long time)
+    let (auth_client, existing_ids) = setup_auth_and_existing_ids(config, only_parse).await?;
+    let action_client = auth_client
+        .as_ref()
+        .map(|auth| ActionClient::new(config.clone(), auth.clone()));
+    
     Ok(SetupResult {
         existing_ids,
         action_client,
