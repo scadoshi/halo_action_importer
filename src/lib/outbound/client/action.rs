@@ -42,66 +42,88 @@ impl ActionClient {
             .get_valid_token()
             .await
             .context("Failed to get valid authentication token")?;
-        for attempt in 0..2 {
-            let request = self
-                .http_client
-                .post(endpoint.clone())
-                .header("Authorization", &auth_token)
-                .header("Content-Type", "application/json; charset=utf-8")
-                .json(&action_objects);
+        
+        // Outer loop for 504 timeout retries (infinite until success)
+        loop {
+            // Inner loop for 401 auth retries (max 2 attempts)
+            for attempt in 0..2 {
+                let request = self
+                    .http_client
+                    .post(endpoint.clone())
+                    .header("Authorization", &auth_token)
+                    .header("Content-Type", "application/json; charset=utf-8")
+                    .json(&action_objects);
 
-            let response = match request.send().await.with_context(|| {
-                format!(
-                    "failed to send POST request for action IDs: {:?} to endpoint: {}",
-                    action_ids, endpoint_str
-                )
-            }) {
-                Ok(resp) => resp,
-                Err(e) => {
-                    error!(
-                        "Failed to send POST request for action IDs {:?}: {}",
-                        action_ids, e
+                let response = match request.send().await.with_context(|| {
+                    format!(
+                        "failed to send POST request for action IDs: {:?} to endpoint: {}",
+                        action_ids, endpoint_str
+                    )
+                }) {
+                    Ok(resp) => resp,
+                    Err(e) => {
+                        error!(
+                            "Failed to send POST request for action IDs {:?}: {}",
+                            action_ids, e
+                        );
+                        return Err(e);
+                    }
+                };
+
+                let status = response.status();
+                
+                // Handle 504 Gateway Timeout - wait 5 minutes and retry from outer loop
+                if status == reqwest::StatusCode::GATEWAY_TIMEOUT {
+                    warn!(
+                        "Received 504 Gateway Timeout for action IDs {:?}, waiting 5 minutes before retrying",
+                        action_ids
                     );
-                    return Err(e);
+                    tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                    auth_token = self
+                        .auth_client
+                        .get_valid_token()
+                        .await
+                        .context("Failed to refresh authentication token after 504")?;
+                    break; // Break inner loop to retry from outer loop
                 }
-            };
+                
+                if status == reqwest::StatusCode::UNAUTHORIZED && attempt == 0 {
+                    warn!("Received 401 Unauthorized for batch, refreshing token and retrying");
+                    auth_token = self
+                        .auth_client
+                        .get_valid_token()
+                        .await
+                        .context("Failed to refresh authentication token after 401")?;
+                    continue;
+                }
 
-            let status = response.status();
-            if status == reqwest::StatusCode::UNAUTHORIZED && attempt == 0 {
-                warn!("Received 401 Unauthorized for batch, refreshing token and retrying");
-                auth_token = self
-                    .auth_client
-                    .get_valid_token()
-                    .await
-                    .context("Failed to refresh authentication token after 401")?;
-                continue;
+                if !status.is_success() {
+                    let error_text: String = response
+                        .text()
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "failed to read error response body for action IDs: {:?} (status: {})",
+                                action_ids, status
+                            )
+                        })
+                        .unwrap_or_else(|_| "failed to get error response".to_string());
+                    error!(
+                        "Action object POST failed for batch: status {}, error: {}",
+                        status, error_text
+                    );
+                    anyhow::bail!(
+                        "Action object POST failed for batch: status {}, error: {}",
+                        status,
+                        error_text
+                    )
+                }
+
+                // Success - return from function
+                return Ok(());
             }
-
-            if !status.is_success() {
-                let error_text: String = response
-                    .text()
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "failed to read error response body for action IDs: {:?} (status: {})",
-                            action_ids, status
-                        )
-                    })
-                    .unwrap_or_else(|_| "failed to get error response".to_string());
-                error!(
-                    "Action object POST failed for batch: status {}, error: {}",
-                    status, error_text
-                );
-                anyhow::bail!(
-                    "Action object POST failed for batch: status {}, error: {}",
-                    status,
-                    error_text
-                )
-            }
-
-            return Ok(());
+            // If we broke out of inner loop due to 504, continue outer loop (retry)
         }
-        anyhow::bail!("Failed to post action objects after retry")
     }
 }
 
