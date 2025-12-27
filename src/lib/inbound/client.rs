@@ -83,11 +83,11 @@ impl ReportClient {
                     // Handle 504 Gateway Timeout - wait 5 minutes and retry from outer loop
                     if status == reqwest::StatusCode::GATEWAY_TIMEOUT {
                         warn!(
-                            "Received 504 Gateway Timeout for report {}/{}, waiting 5 minutes before retrying",
+                            "Received 504 Gateway Timeout for report {}/{}, waiting 1 minute before retrying",
                             idx + 1,
                             total_reports
                         );
-                        tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
                         auth_token = self
                             .auth_client
                             .get_valid_token()
