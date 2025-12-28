@@ -27,13 +27,13 @@ async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let only_parse = args
         .iter()
-        .any(|arg| arg == "--only-parse-inputs" || arg == "--opi");
+        .any(|arg| arg == "--only-parse-inputs" || arg == "--only-parse" || arg == "--op");
     let cache_only = args
         .iter()
-        .any(|arg| arg == "--only-use-cache" || arg == "--ouc");
+        .any(|arg| arg == "--only-use-cache" || arg == "--only-cache" || arg == "--oc");
     let input_path = args
         .iter()
-        .position(|arg| arg == "--input-path" || arg == "--ip")
+        .position(|arg| arg == "--input-path" || arg == "--input" || arg == "--ip")
         .and_then(|i| args.get(i + 1))
         .map(|s| s.as_str())
         .unwrap_or("input");

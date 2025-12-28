@@ -92,7 +92,7 @@ To validate files without making API calls:
 ```bash
 cargo run --release -- --only-parse-inputs
 # or use short form
-cargo run --release -- --opi
+cargo run --release -- --op
 ```
 
 This mode:
@@ -128,7 +128,7 @@ Skip fetching existing IDs from reports and use only the local cache:
 ```bash
 cargo run --release -- --only-use-cache
 # or use short form
-cargo run --release -- --ouc
+cargo run --release -- --oc
 ```
 
 This is useful when you're confident the cache (`cache/existing_action_ids.json`) is up to date and want to skip the time-consuming report fetching.
