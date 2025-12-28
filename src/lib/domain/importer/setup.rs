@@ -183,6 +183,10 @@ pub async fn setup_auth_and_existing_ids(
             "Cache mode: using {} cached IDs, skipping report fetching",
             format_number(cached_ids.len())
         );
+        // Still write cache to ensure file exists
+        if let Err(e) = write_cache(&cached_ids) {
+            tracing::warn!("Failed to write action ID cache: {}", e);
+        }
         if only_parse {
             return Ok((None, cached_ids));
         }
