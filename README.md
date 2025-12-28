@@ -115,7 +115,8 @@ Post multiple actions per API request (default is 1):
 
 ```bash
 cargo run --release -- --batch-size 10
-# or use short form
+# or use short forms
+cargo run --release -- --batch 10
 cargo run --release -- --bs 10
 ```
 

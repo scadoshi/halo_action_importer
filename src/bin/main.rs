@@ -39,7 +39,7 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or("input");
     let batch_size = args
         .iter()
-        .position(|arg| arg == "--batch-size" || arg == "--bs")
+        .position(|arg| arg == "--batch-size" || arg == "--batch" || arg == "--bs")
         .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(1);
