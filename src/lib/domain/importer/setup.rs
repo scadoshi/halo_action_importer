@@ -37,7 +37,7 @@ pub fn read_cached_ids() -> HashSet<String> {
     if !path.exists() {
         return HashSet::new();
     }
-    
+
     match std::fs::File::open(path) {
         Ok(file) => {
             let reader = BufReader::new(file);
@@ -60,18 +60,18 @@ pub fn read_cached_ids() -> HashSet<String> {
 pub fn write_cache(ids: &HashSet<String>) -> anyhow::Result<()> {
     std::fs::create_dir_all(CACHE_DIR)
         .with_context(|| format!("Failed to create cache directory: {}", CACHE_DIR))?;
-    
+
     let mut file = OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(true)
         .open(CACHE_FILE)
         .with_context(|| format!("Failed to open cache file: {}", CACHE_FILE))?;
-    
+
     for id in ids {
         writeln!(file, "{}", id)?;
     }
-    
+
     Ok(())
 }
 
@@ -79,13 +79,13 @@ pub fn write_cache(ids: &HashSet<String>) -> anyhow::Result<()> {
 pub fn append_to_cache(id: &str) -> anyhow::Result<()> {
     std::fs::create_dir_all(CACHE_DIR)
         .with_context(|| format!("Failed to create cache directory: {}", CACHE_DIR))?;
-    
+
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
         .open(CACHE_FILE)
         .with_context(|| format!("Failed to open cache file for append: {}", CACHE_FILE))?;
-    
+
     writeln!(file, "{}", id)?;
     Ok(())
 }
@@ -95,16 +95,16 @@ pub fn append_batch_to_cache(ids: &[String]) -> anyhow::Result<()> {
     if ids.is_empty() {
         return Ok(());
     }
-    
+
     std::fs::create_dir_all(CACHE_DIR)
         .with_context(|| format!("Failed to create cache directory: {}", CACHE_DIR))?;
-    
+
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
         .open(CACHE_FILE)
         .with_context(|| format!("Failed to open cache file for append: {}", CACHE_FILE))?;
-    
+
     for id in ids {
         writeln!(file, "{}", id)?;
     }
@@ -159,6 +159,7 @@ pub fn setup_logging(only_parse: bool, log_level: tracing::Level) -> anyhow::Res
 pub async fn setup_auth_and_existing_ids(
     config: &Config,
     only_parse: bool,
+    cache_only: bool,
 ) -> anyhow::Result<(Option<Arc<AuthClient>>, HashSet<String>)> {
     // Read cached IDs first
     let cached_ids = read_cached_ids();
@@ -168,14 +169,26 @@ pub async fn setup_auth_and_existing_ids(
             format_number(cached_ids.len())
         );
     }
-    
+
     let auth_client = Arc::new(AuthClient::new(config.clone()));
     let _token = auth_client
         .get_valid_token()
         .await
         .context("Failed to authenticate with Halo API")?;
     info!("Authentication successful");
-    
+
+    // If cache_only, skip report fetching entirely
+    if cache_only {
+        info!(
+            "Cache mode: using {} cached IDs, skipping report fetching",
+            format_number(cached_ids.len())
+        );
+        if only_parse {
+            return Ok((None, cached_ids));
+        }
+        return Ok((Some(auth_client), cached_ids));
+    }
+
     let report_client = ReportClient::new(config.clone(), auth_client.clone());
     let report_ids = report_client
         .get_existing_action_ids()
@@ -185,26 +198,29 @@ pub async fn setup_auth_and_existing_ids(
         "Fetched {} action IDs from reports",
         format_number(report_ids.len())
     );
-    
+
     // Merge cached and report IDs
     let mut all_ids = cached_ids;
     let before_merge = all_ids.len();
     all_ids.extend(report_ids);
     let new_from_reports = all_ids.len() - before_merge;
-    
+
     info!(
         "Total {} existing action IDs to skip ({} new from reports)",
         format_number(all_ids.len()),
         format_number(new_from_reports)
     );
-    
+
     // Write merged set back to cache
     if let Err(e) = write_cache(&all_ids) {
         tracing::warn!("Failed to write action ID cache: {}", e);
     } else {
-        info!("Updated cache with {} action IDs", format_number(all_ids.len()));
+        info!(
+            "Updated cache with {} action IDs",
+            format_number(all_ids.len())
+        );
     }
-    
+
     if only_parse {
         info!(
             "Parse-only mode: existing IDs fetched successfully, will skip API calls for imports"
@@ -247,6 +263,7 @@ pub fn discover_files(input_path: &str) -> anyhow::Result<Vec<(PathBuf, String)>
 pub async fn setup(
     config: &Config,
     only_parse: bool,
+    cache_only: bool,
     input_path: &str,
 ) -> anyhow::Result<SetupResult> {
     // Check for files FIRST before doing expensive ID fetching
@@ -257,13 +274,14 @@ pub async fn setup(
             input_path
         );
     }
-    
-    // Now fetch existing IDs (this can take a long time)
-    let (auth_client, existing_ids) = setup_auth_and_existing_ids(config, only_parse).await?;
+
+    // Now fetch existing IDs (this can take a long time unless cache_only)
+    let (auth_client, existing_ids) =
+        setup_auth_and_existing_ids(config, only_parse, cache_only).await?;
     let action_client = auth_client
         .as_ref()
         .map(|auth| ActionClient::new(config.clone(), auth.clone()));
-    
+
     Ok(SetupResult {
         existing_ids,
         action_client,

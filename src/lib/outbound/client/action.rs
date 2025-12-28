@@ -42,7 +42,7 @@ impl ActionClient {
             .get_valid_token()
             .await
             .context("Failed to get valid authentication token")?;
-        
+
         // Outer loop for 504 timeout retries (infinite until success)
         loop {
             // Inner loop for 401 auth retries (max 2 attempts)
@@ -71,7 +71,7 @@ impl ActionClient {
                 };
 
                 let status = response.status();
-                
+
                 // Handle 504 Gateway Timeout - wait 5 minutes and retry from outer loop
                 if status == reqwest::StatusCode::GATEWAY_TIMEOUT {
                     warn!(
@@ -86,7 +86,7 @@ impl ActionClient {
                         .context("Failed to refresh authentication token after 504")?;
                     break; // Break inner loop to retry from outer loop
                 }
-                
+
                 if status == reqwest::StatusCode::UNAUTHORIZED && attempt == 0 {
                     warn!("Received 401 Unauthorized for batch, refreshing token and retrying");
                     auth_token = self

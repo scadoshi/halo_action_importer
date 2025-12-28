@@ -79,7 +79,7 @@ impl ReportClient {
                         .context("failed to send report request")?;
 
                     let status = response.status();
-                    
+
                     // Handle 504 Gateway Timeout - wait 5 minutes and retry from outer loop
                     if status == reqwest::StatusCode::GATEWAY_TIMEOUT {
                         warn!(
@@ -95,7 +95,7 @@ impl ReportClient {
                             .context("Failed to refresh authentication token after 504")?;
                         continue 'outer; // Continue outer loop to retry
                     }
-                    
+
                     if status == reqwest::StatusCode::UNAUTHORIZED && attempt == 0 {
                         warn!(
                             "Received 401 Unauthorized for report request, refreshing token and retrying"

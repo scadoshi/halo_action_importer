@@ -28,15 +28,18 @@ async fn main() -> anyhow::Result<()> {
     let only_parse = args
         .iter()
         .any(|arg| arg == "--only-parse" || arg == "--op");
+    let cache_only = args
+        .iter()
+        .any(|arg| arg == "--only-cache" || arg == "--oc");
     let input_path = args
         .iter()
-        .position(|arg| arg == "--input")
+        .position(|arg| arg == "--input" || arg == "--in")
         .and_then(|i| args.get(i + 1))
         .map(|s| s.as_str())
         .unwrap_or("input");
     let batch_size = args
         .iter()
-        .position(|arg| arg == "--batch")
+        .position(|arg| arg == "--batch" || arg == "--bat")
         .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(1);
@@ -50,10 +53,13 @@ async fn main() -> anyhow::Result<()> {
         action_client,
         files_to_process,
         auth_client: _,
-    } = setup::setup(&config, only_parse, input_path).await?;
+    } = setup::setup(&config, only_parse, cache_only, input_path).await?;
 
     let total_sheets = files_to_process.len();
     info!("Processing files from directory: {}", input_path);
+    if cache_only {
+        info!("Cache mode: using cached IDs only, skipping report fetching");
+    }
     if batch_size > 1 {
         info!(
             "Batch mode enabled: posting {} actions per request",
@@ -62,7 +68,7 @@ async fn main() -> anyhow::Result<()> {
     }
     if only_parse {
         info!(
-            "Starting parse-only import of {} file(s) (will test report fetching + file parsing)",
+            "Starting parse-only import of {} file(s)",
             format_number(total_sheets)
         );
     } else {
