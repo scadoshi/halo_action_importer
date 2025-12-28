@@ -1,3 +1,4 @@
+use crate::domain::importer::setup::append_batch_to_cache;
 use crate::inbound::file::{Reader, csv::Csv, excel::Excel};
 use crate::outbound::client::action::ActionClient;
 use std::collections::HashSet;
@@ -146,6 +147,12 @@ pub async fn process_csv_file(
                                     ticket_ids.join(", ")
                                 );
                             }
+                            // Append imported IDs to cache
+                            let imported_ids: Vec<String> =
+                                batch.iter().map(|a| a.action_id().to_string()).collect();
+                            if let Err(e) = append_batch_to_cache(&imported_ids) {
+                                warn!("Failed to update cache with imported IDs: {}", e);
+                            }
                             let batch_time = batch_start.elapsed().as_secs_f64();
                             let per_row_time = batch_time / batch_count as f64;
                             row_times.push(per_row_time);
@@ -250,6 +257,12 @@ pub async fn process_csv_file(
                             action_ids.join(", "),
                             ticket_ids.join(", ")
                         );
+                    }
+                    // Append imported IDs to cache
+                    let imported_ids: Vec<String> =
+                        batch.iter().map(|a| a.action_id().to_string()).collect();
+                    if let Err(e) = append_batch_to_cache(&imported_ids) {
+                        warn!("Failed to update cache with imported IDs: {}", e);
                     }
                     let batch_time = batch_start.elapsed().as_secs_f64();
                     let per_row_time = batch_time / batch_count as f64;
@@ -441,6 +454,12 @@ pub async fn process_excel_file(
                                     ticket_ids.join(", ")
                                 );
                             }
+                            // Append imported IDs to cache
+                            let imported_ids: Vec<String> =
+                                batch.iter().map(|a| a.action_id().to_string()).collect();
+                            if let Err(e) = append_batch_to_cache(&imported_ids) {
+                                warn!("Failed to update cache with imported IDs: {}", e);
+                            }
                             let batch_time = batch_start.elapsed().as_secs_f64();
                             let per_row_time = batch_time / batch_count as f64;
                             row_times.push(per_row_time);
@@ -540,6 +559,12 @@ pub async fn process_excel_file(
                             action_ids.join(", "),
                             ticket_ids.join(", ")
                         );
+                    }
+                    // Append imported IDs to cache
+                    let imported_ids: Vec<String> =
+                        batch.iter().map(|a| a.action_id().to_string()).collect();
+                    if let Err(e) = append_batch_to_cache(&imported_ids) {
+                        warn!("Failed to update cache with imported IDs: {}", e);
                     }
                     let batch_time = batch_start.elapsed().as_secs_f64();
                     let per_row_time = batch_time / batch_count as f64;
