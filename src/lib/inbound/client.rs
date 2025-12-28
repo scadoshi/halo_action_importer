@@ -1,4 +1,4 @@
-use crate::{config::Config, outbound::client::auth::AuthClient};
+use crate::{config::Config, domain::importer::setup::append_batch_to_cache, outbound::client::auth::AuthClient};
 use anyhow::Context;
 use reqwest::Client as ReqwestClient;
 use serde::Deserialize;
@@ -138,29 +138,29 @@ impl ReportClient {
                         anyhow::bail!("Report response is empty");
                     }
 
+                    let mut report_ids: Vec<String> = Vec::new();
                     for row in &report_data {
                         for id_str in row.action_ids.split(',') {
                             let id_str = id_str.trim();
                             if !id_str.is_empty() {
+                                report_ids.push(id_str.to_string());
                                 all_existing_ids.insert(id_str.to_string());
                             }
                         }
+                    }
+
+                    if let Err(e) = append_batch_to_cache(&report_ids) {
+                        warn!("Failed to cache IDs from report {}: {}", idx + 1, e);
                     }
 
                     tracing::info!(
                         "Report {}/{} complete: {} IDs in this report, {} total IDs so far",
                         idx + 1,
                         total_reports,
-                        report_data.iter().fold(0, |acc, row| {
-                            acc + row
-                                .action_ids
-                                .split(',')
-                                .filter(|s| !s.trim().is_empty())
-                                .count()
-                        }),
+                        report_ids.len(),
                         format_number(all_existing_ids.len())
                     );
-                    break 'outer; // Success - break outer loop and move to next report
+                    break 'outer;
                 }
             }
         }
