@@ -10,6 +10,7 @@ chrono = { version = "0.4", features = ["serde"] }
 colored = "3.0.0"
 csv = "1.4.0"
 dotenvy = "0.15"
+fs2 = "0.4"
 log = "0.4.29"
 reqwest = { version = "0.12", features = ["json"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -22,6 +23,10 @@ tracing-subscriber = { version = "0.3.22", features = ["chrono"] }
 [[bin]]
 name = "halo_action_importer"
 path = "src/bin/main.rs"
+
+[[bin]]
+name = "migrate_cache"
+path = "src/bin/migrate_cache.rs"
 
 [lib]
 path = "src/lib/lib.rs"
