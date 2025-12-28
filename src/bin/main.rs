@@ -27,19 +27,19 @@ async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let only_parse = args
         .iter()
-        .any(|arg| arg == "--only-parse" || arg == "--op");
+        .any(|arg| arg == "--only-parse-inputs" || arg == "--opi");
     let cache_only = args
         .iter()
-        .any(|arg| arg == "--only-cache" || arg == "--oc");
+        .any(|arg| arg == "--only-use-cache" || arg == "--ouc");
     let input_path = args
         .iter()
-        .position(|arg| arg == "--input" || arg == "--in")
+        .position(|arg| arg == "--input-path" || arg == "--ip")
         .and_then(|i| args.get(i + 1))
         .map(|s| s.as_str())
         .unwrap_or("input");
     let batch_size = args
         .iter()
-        .position(|arg| arg == "--batch" || arg == "--bat")
+        .position(|arg| arg == "--batch-size" || arg == "--bs")
         .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(1);

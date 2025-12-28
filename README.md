@@ -78,7 +78,9 @@ The application will:
 To process files from a different directory:
 
 ```bash
-cargo run --release -- --input input/1
+cargo run --release -- --input-path input/1
+# or use short form
+cargo run --release -- --ip input/1
 ```
 
 This is useful for running multiple instances in parallel on different input directories. You can organize files into subdirectories like `input/1/`, `input/2/`, etc., and run separate instances for each.
@@ -88,9 +90,9 @@ This is useful for running multiple instances in parallel on different input dir
 To validate files without making API calls:
 
 ```bash
-cargo run --release -- --only-parse
+cargo run --release -- --only-parse-inputs
 # or use short form
-cargo run --release -- --op
+cargo run --release -- --opi
 ```
 
 This mode:
@@ -112,10 +114,24 @@ This is useful for:
 Post multiple actions per API request (default is 1):
 
 ```bash
-cargo run --release -- --batch 10
+cargo run --release -- --batch-size 10
+# or use short form
+cargo run --release -- --bs 10
 ```
 
 Batch mode groups actions into batches of the specified size before posting to the API. This significantly improves throughput by reducing the number of API calls and network overhead.
+
+### Cache-Only Mode
+
+Skip fetching existing IDs from reports and use only the local cache:
+
+```bash
+cargo run --release -- --only-use-cache
+# or use short form
+cargo run --release -- --ouc
+```
+
+This is useful when you're confident the cache (`cache/existing_action_ids.txt`) is up to date and want to skip the time-consuming report fetching. The cache is automatically updated as new actions are imported.
 
 ### Parallel Execution
 
@@ -123,9 +139,9 @@ You can run multiple instances on different input directories:
 
 ```bash
 # Run multiple instances in parallel (different subdirectories with batch mode)
-cargo run --release -- --input input/1 --batch 10 &
-cargo run --release -- --input input/2 --batch 10 &
-cargo run --release -- --input input/3 --batch 10 &
+cargo run --release -- --ip input/1 --bs 10 &
+cargo run --release -- --ip input/2 --bs 10 &
+cargo run --release -- --ip input/3 --bs 10 &
 ```
 
 Simply split your files into separate directories and run one instance per directory.
@@ -180,7 +196,7 @@ Progress logs include:
 Skipped 1,234 entries (already exist)
 ```
 
-**Success Messages**: Each successful import is logged. When using `--batch` mode with batch size > 1:
+**Success Messages**: Each successful import is logged. When using `--batch-size` mode with batch size > 1:
 ```
 Success: imported batch of 10 actions | action IDs: 12345, 12346, 12347 | ticket IDs: 67890, 67891
 ```
