@@ -1,10 +1,13 @@
-use crate::{config::Config, domain::importer::setup::append_batch_to_cache, outbound::client::auth::AuthClient};
+use crate::{
+    config::Config, domain::importer::setup::append_resource_to_cache,
+    outbound::client::auth::AuthClient,
+};
 use anyhow::Context;
 use reqwest::Client as ReqwestClient;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::sync::Arc;
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 fn format_number(n: usize) -> String {
     let s = n.to_string();
@@ -43,21 +46,35 @@ impl ReportClient {
         }
     }
 
-    pub async fn get_existing_action_ids(&self) -> anyhow::Result<HashSet<String>> {
+    pub async fn get_existing_action_ids(
+        &self,
+        already_fetched: &HashSet<String>,
+    ) -> anyhow::Result<HashSet<String>> {
         let mut all_existing_ids = HashSet::new();
-        let total_reports = self.config.action_ids_resources.len();
-        tracing::info!(
-            "Fetching existing action IDs from {} report(s)",
-            total_reports
+        let total_reports = self.config.action_ids_resource_uuids.len();
+        let to_fetch: Vec<_> = self
+            .config
+            .action_ids_resource_uuids
+            .iter()
+            .filter(|uuid| !already_fetched.contains(*uuid))
+            .collect();
+        let skipped = total_reports - to_fetch.len();
+
+        info!(
+            "Found {} report resource(s), {} already cached, {} to fetch",
+            total_reports,
+            skipped,
+            to_fetch.len()
         );
 
-        for (idx, report_url) in self.config.action_ids_resources.iter().enumerate() {
-            tracing::info!(
-                "Fetching report {}/{}: {}",
-                idx + 1,
-                total_reports,
-                report_url
-            );
+        if to_fetch.is_empty() {
+            info!("All resources already cached, skipping report fetching");
+            return Ok(all_existing_ids);
+        }
+
+        for (idx, uuid) in to_fetch.iter().enumerate() {
+            let report_url = format!("{}api/ReportData/{}", self.config.base_resource_url, uuid);
+            info!("Fetching report {}/{}: {}", idx + 1, to_fetch.len(), uuid);
 
             let mut auth_token = self
                 .auth_client
@@ -69,7 +86,7 @@ impl ReportClient {
                 for attempt in 0..2 {
                     let response = self
                         .http_client
-                        .get(report_url.as_str())
+                        .get(&report_url)
                         .header("Authorization", &auth_token)
                         .header("Content-Type", "application/json; charset=utf-8")
                         .send()
@@ -80,9 +97,9 @@ impl ReportClient {
 
                     if status == reqwest::StatusCode::GATEWAY_TIMEOUT {
                         warn!(
-                            "Received 504 Gateway Timeout for report {}/{}, waiting 1 minute before retrying",
+                            "Received 504 Gateway Timeout for report {} ({}), waiting 1 minute before retrying",
                             idx + 1,
-                            total_reports
+                            uuid
                         );
                         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
                         auth_token = self
@@ -149,15 +166,16 @@ impl ReportClient {
                         }
                     }
 
-                    if let Err(e) = append_batch_to_cache(&report_ids) {
-                        warn!("Failed to cache IDs from report {}: {}", idx + 1, e);
+                    if let Err(e) = append_resource_to_cache(uuid, &report_ids) {
+                        warn!("Failed to cache IDs from report {}: {}", uuid, e);
                     }
 
-                    tracing::info!(
-                        "Report {}/{} complete: {} IDs in this report, {} total IDs so far",
+                    info!(
+                        "Report {}/{} complete: {} IDs from {}, {} total new IDs",
                         idx + 1,
-                        total_reports,
+                        to_fetch.len(),
                         report_ids.len(),
+                        uuid,
                         format_number(all_existing_ids.len())
                     );
                     break 'outer;
@@ -165,9 +183,10 @@ impl ReportClient {
             }
         }
 
-        tracing::info!(
-            "Completed fetching all reports: {} total existing action IDs",
-            format_number(all_existing_ids.len())
+        info!(
+            "Completed fetching reports: {} new action IDs from {} resource(s)",
+            format_number(all_existing_ids.len()),
+            to_fetch.len()
         );
         Ok(all_existing_ids)
     }

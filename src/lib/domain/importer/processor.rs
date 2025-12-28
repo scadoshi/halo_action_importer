@@ -1,4 +1,4 @@
-use crate::domain::importer::setup::append_batch_to_cache;
+use crate::domain::importer::setup::append_imported_ids_to_cache;
 use crate::inbound::file::{Reader, csv::Csv, excel::Excel};
 use crate::outbound::client::action::ActionClient;
 use std::collections::HashSet;
@@ -149,7 +149,7 @@ pub async fn process_csv_file(
                             }
                             let imported_ids: Vec<String> =
                                 batch.iter().map(|a| a.action_id().to_string()).collect();
-                            if let Err(e) = append_batch_to_cache(&imported_ids) {
+                            if let Err(e) = append_imported_ids_to_cache(&imported_ids) {
                                 warn!("Failed to update cache with imported IDs: {}", e);
                             }
                             let batch_time = batch_start.elapsed().as_secs_f64();
@@ -259,7 +259,7 @@ pub async fn process_csv_file(
                     }
                     let imported_ids: Vec<String> =
                         batch.iter().map(|a| a.action_id().to_string()).collect();
-                    if let Err(e) = append_batch_to_cache(&imported_ids) {
+                    if let Err(e) = append_imported_ids_to_cache(&imported_ids) {
                         warn!("Failed to update cache with imported IDs: {}", e);
                     }
                     let batch_time = batch_start.elapsed().as_secs_f64();
@@ -454,7 +454,7 @@ pub async fn process_excel_file(
                             }
                             let imported_ids: Vec<String> =
                                 batch.iter().map(|a| a.action_id().to_string()).collect();
-                            if let Err(e) = append_batch_to_cache(&imported_ids) {
+                            if let Err(e) = append_imported_ids_to_cache(&imported_ids) {
                                 warn!("Failed to update cache with imported IDs: {}", e);
                             }
                             let batch_time = batch_start.elapsed().as_secs_f64();
@@ -559,7 +559,7 @@ pub async fn process_excel_file(
                     }
                     let imported_ids: Vec<String> =
                         batch.iter().map(|a| a.action_id().to_string()).collect();
-                    if let Err(e) = append_batch_to_cache(&imported_ids) {
+                    if let Err(e) = append_imported_ids_to_cache(&imported_ids) {
                         warn!("Failed to update cache with imported IDs: {}", e);
                     }
                     let batch_time = batch_start.elapsed().as_secs_f64();

@@ -41,8 +41,8 @@ BASE_RESOURCE_URL = https://example.haloitsm.com/
 CLIENT_ID = client-id-goes-here
 CLIENT_SECRET = super-secret-client-secret-goes-here
 
-# Actions
-ACTION_IDS_RESOURCE_PATH = /api/ReportData/uuid-1,/api/ReportData/uuid-2,/api/ReportData/uuid-3
+# Actions - just the UUIDs, application builds full URL
+ACTION_IDS_RESOURCE_PATHS = aa637f8f-0e94-48e4-8881-8e1ff08445ec,9a887d53-85fa-4928-a450-9aece690ade2,385ac9e1-4679-4e43-88a7-3c02876cab25
 ACTION_ID_CUSTOM_FIELD_ID = 123
 ```
 
@@ -51,7 +51,7 @@ ACTION_ID_CUSTOM_FIELD_ID = 123
 - `BASE_RESOURCE_URL` - Base URL of your Halo instance (include trailing slash)
 - `CLIENT_ID` - OAuth2 client ID for API authentication
 - `CLIENT_SECRET` - OAuth2 client secret for API authentication
-- `ACTION_IDS_RESOURCE_PATH` - API path(s) to report(s) that return existing action IDs. Can be a single path or comma-separated list of multiple paths (e.g., `/api/ReportData/uuid-1,/api/ReportData/uuid-2`). **CRITICAL:** For large datasets (3M+ IDs), use multiple reports to avoid timeouts. See `sql/` directory for query templates.
+- `ACTION_IDS_RESOURCE_PATHS` - UUID(s) of report(s) that return existing action IDs. Just the UUIDs, the application builds the full URL. Can be a single UUID or comma-separated list (e.g., `aa637f8f-0e94-48e4-8881-8e1ff08445ec,9a887d53-85fa-4928-a450-9aece690ade2`). **CRITICAL:** For large datasets (3M+ IDs), use multiple reports to avoid timeouts. See `sql/` directory for query templates.
 - `ACTION_ID_CUSTOM_FIELD_ID` - Custom field ID used to store the unique action identifier (numeric value)
 - `LOG_LEVEL` - Logging level (trace, debug, info, warn, error). Defaults to `info` if not specified.
 
@@ -131,7 +131,31 @@ cargo run --release -- --only-use-cache
 cargo run --release -- --ouc
 ```
 
-This is useful when you're confident the cache (`cache/existing_action_ids.txt`) is up to date and want to skip the time-consuming report fetching. The cache is automatically updated as new actions are imported.
+This is useful when you're confident the cache (`cache/existing_action_ids.json`) is up to date and want to skip the time-consuming report fetching.
+
+The cache file is a JSON file that tracks which resources have been fetched:
+
+```json
+[
+  {
+    "resource_id": "aa637f8f-0e94-48e4-8881-8e1ff08445ec",
+    "action_ids": ["12", "1234", "85656"]
+  },
+  {
+    "resource_id": "9a887d53-85fa-4928-a450-9aece690ade2",
+    "action_ids": ["3123312", "411", "4"]
+  },
+  {
+    "resource_id": "_imported",
+    "action_ids": ["999", "1000"]
+  }
+]
+```
+
+This allows the application to:
+- Skip resources that have already been fetched (even across restarts)
+- Incrementally build the cache as each report completes
+- Track imported action IDs separately under `_imported`
 
 ### Parallel Execution
 

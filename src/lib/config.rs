@@ -8,7 +8,7 @@ pub struct Config {
     pub token_url: Url,
     pub client_id: String,
     pub client_secret: String,
-    pub action_ids_resources: Vec<Url>,
+    pub action_ids_resource_uuids: Vec<String>,
     pub action_id_custom_field_id: u32,
     pub log_level: Level,
 }
@@ -19,7 +19,7 @@ const CLIENT_SECRET_KEY: &str = "CLIENT_SECRET";
 
 const TOKEN_URL_PATH: &str = "auth/token";
 
-const ACTION_IDS_RESOURCE_PATH_KEY: &str = "ACTION_IDS_RESOURCE_PATH";
+const ACTION_IDS_RESOURCE_PATH_KEY: &str = "ACTION_IDS_RESOURCE_PATHS";
 const ACTION_ID_CUSTOM_FIELD_ID_KEY: &str = "ACTION_ID_CUSTOM_FIELD_ID";
 const LOG_LEVEL_KEY: &str = "LOG_LEVEL";
 
@@ -49,20 +49,17 @@ impl Config {
                 CLIENT_SECRET_KEY
             )
         })?;
-        let action_ids_paths = std::env::var(ACTION_IDS_RESOURCE_PATH_KEY).with_context(|| {
-            format!(
-                "missing required environment variable: {}",
-                ACTION_IDS_RESOURCE_PATH_KEY
-            )
-        })?;
-        let action_ids_resources: Vec<Url> = action_ids_paths
+        let action_ids_uuids_str =
+            std::env::var(ACTION_IDS_RESOURCE_PATH_KEY).with_context(|| {
+                format!(
+                    "missing required environment variable: {}",
+                    ACTION_IDS_RESOURCE_PATH_KEY
+                )
+            })?;
+        let action_ids_resource_uuids: Vec<String> = action_ids_uuids_str
             .split(',')
-            .map(|path| {
-                let path = path.trim();
-                let mut url = base_resource_url.clone();
-                url.set_path(path);
-                url
-            })
+            .map(|uuid| uuid.trim().to_string())
+            .filter(|uuid| !uuid.is_empty())
             .collect();
         let action_id_custom_field_id_str = std::env::var(ACTION_ID_CUSTOM_FIELD_ID_KEY)
             .with_context(|| {
@@ -101,7 +98,7 @@ impl Config {
             token_url,
             client_id,
             client_secret,
-            action_ids_resources,
+            action_ids_resource_uuids,
             action_id_custom_field_id,
             log_level,
         })

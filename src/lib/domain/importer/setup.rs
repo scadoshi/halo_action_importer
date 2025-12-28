@@ -3,10 +3,11 @@ use crate::inbound::client::ReportClient;
 use crate::outbound::client::{action::ActionClient, auth::AuthClient};
 use anyhow::Context;
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs::OpenOptions;
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::info;
@@ -29,37 +30,87 @@ fn format_number(n: usize) -> String {
 
 const LOG_DIR: &str = "log";
 const CACHE_DIR: &str = "cache";
-const CACHE_FILE: &str = "cache/existing_action_ids.txt";
+const CACHE_FILE: &str = "cache/existing_action_ids.json";
 
-/// Read cached action IDs from file (one ID per line)
-pub fn read_cached_ids() -> HashSet<String> {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceCache {
+    pub resource_id: String,
+    pub action_ids: Vec<String>,
+}
+
+pub struct CacheData {
+    pub action_ids: HashSet<String>,
+    pub fetched_resources: HashSet<String>,
+}
+
+/// Read cached action IDs from JSON file
+pub fn read_cached_ids() -> CacheData {
     let path = Path::new(CACHE_FILE);
     if !path.exists() {
-        return HashSet::new();
+        return CacheData {
+            action_ids: HashSet::new(),
+            fetched_resources: HashSet::new(),
+        };
     }
 
-    match std::fs::File::open(path) {
-        Ok(file) => {
-            let reader = BufReader::new(file);
-            let mut ids = HashSet::new();
-            for line in reader.lines() {
-                if let Ok(id) = line {
-                    let id = id.trim();
-                    if !id.is_empty() {
-                        ids.insert(id.to_string());
+    match std::fs::read_to_string(path) {
+        Ok(contents) => match serde_json::from_str::<Vec<ResourceCache>>(&contents) {
+            Ok(resources) => {
+                let mut action_ids = HashSet::new();
+                let mut fetched_resources = HashSet::new();
+                for resource in resources {
+                    fetched_resources.insert(resource.resource_id);
+                    for id in resource.action_ids {
+                        action_ids.insert(id);
                     }
                 }
+                CacheData {
+                    action_ids,
+                    fetched_resources,
+                }
             }
-            ids
-        }
-        Err(_) => HashSet::new(),
+            Err(_) => CacheData {
+                action_ids: HashSet::new(),
+                fetched_resources: HashSet::new(),
+            },
+        },
+        Err(_) => CacheData {
+            action_ids: HashSet::new(),
+            fetched_resources: HashSet::new(),
+        },
     }
 }
 
-/// Write all action IDs to cache file (overwrites)
-pub fn write_cache(ids: &HashSet<String>) -> anyhow::Result<()> {
+/// Append a resource with its action IDs to the cache file
+pub fn append_resource_to_cache(resource_id: &str, action_ids: &[String]) -> anyhow::Result<()> {
+    if action_ids.is_empty() {
+        return Ok(());
+    }
+
     std::fs::create_dir_all(CACHE_DIR)
         .with_context(|| format!("Failed to create cache directory: {}", CACHE_DIR))?;
+
+    let path = Path::new(CACHE_FILE);
+    let mut resources: Vec<ResourceCache> = if path.exists() {
+        match std::fs::read_to_string(path) {
+            Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
+            Err(_) => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+
+    if let Some(existing) = resources.iter_mut().find(|r| r.resource_id == resource_id) {
+        existing.action_ids.extend(action_ids.iter().cloned());
+    } else {
+        resources.push(ResourceCache {
+            resource_id: resource_id.to_string(),
+            action_ids: action_ids.to_vec(),
+        });
+    }
+
+    let json = serde_json::to_string_pretty(&resources)
+        .with_context(|| "Failed to serialize cache to JSON")?;
 
     let mut file = OpenOptions::new()
         .create(true)
@@ -68,30 +119,12 @@ pub fn write_cache(ids: &HashSet<String>) -> anyhow::Result<()> {
         .open(CACHE_FILE)
         .with_context(|| format!("Failed to open cache file: {}", CACHE_FILE))?;
 
-    for id in ids {
-        writeln!(file, "{}", id)?;
-    }
-
+    file.write_all(json.as_bytes())?;
     Ok(())
 }
 
-/// Append a single action ID to cache file
-pub fn append_to_cache(id: &str) -> anyhow::Result<()> {
-    std::fs::create_dir_all(CACHE_DIR)
-        .with_context(|| format!("Failed to create cache directory: {}", CACHE_DIR))?;
-
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(CACHE_FILE)
-        .with_context(|| format!("Failed to open cache file for append: {}", CACHE_FILE))?;
-
-    writeln!(file, "{}", id)?;
-    Ok(())
-}
-
-/// Append multiple action IDs to cache file
-pub fn append_batch_to_cache(ids: &[String]) -> anyhow::Result<()> {
+/// Append action IDs for imported actions (no resource tracking)
+pub fn append_imported_ids_to_cache(ids: &[String]) -> anyhow::Result<()> {
     if ids.is_empty() {
         return Ok(());
     }
@@ -99,15 +132,40 @@ pub fn append_batch_to_cache(ids: &[String]) -> anyhow::Result<()> {
     std::fs::create_dir_all(CACHE_DIR)
         .with_context(|| format!("Failed to create cache directory: {}", CACHE_DIR))?;
 
+    let path = Path::new(CACHE_FILE);
+    let mut resources: Vec<ResourceCache> = if path.exists() {
+        match std::fs::read_to_string(path) {
+            Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
+            Err(_) => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+
+    const IMPORTED_RESOURCE_ID: &str = "_imported";
+    if let Some(existing) = resources
+        .iter_mut()
+        .find(|r| r.resource_id == IMPORTED_RESOURCE_ID)
+    {
+        existing.action_ids.extend(ids.iter().cloned());
+    } else {
+        resources.push(ResourceCache {
+            resource_id: IMPORTED_RESOURCE_ID.to_string(),
+            action_ids: ids.to_vec(),
+        });
+    }
+
+    let json = serde_json::to_string_pretty(&resources)
+        .with_context(|| "Failed to serialize cache to JSON")?;
+
     let mut file = OpenOptions::new()
         .create(true)
-        .append(true)
+        .write(true)
+        .truncate(true)
         .open(CACHE_FILE)
-        .with_context(|| format!("Failed to open cache file for append: {}", CACHE_FILE))?;
+        .with_context(|| format!("Failed to open cache file: {}", CACHE_FILE))?;
 
-    for id in ids {
-        writeln!(file, "{}", id)?;
-    }
+    file.write_all(json.as_bytes())?;
     Ok(())
 }
 
@@ -161,11 +219,12 @@ pub async fn setup_auth_and_existing_ids(
     only_parse: bool,
     cache_only: bool,
 ) -> anyhow::Result<(Option<Arc<AuthClient>>, HashSet<String>)> {
-    let cached_ids = read_cached_ids();
-    if !cached_ids.is_empty() {
+    let cache_data = read_cached_ids();
+    if !cache_data.action_ids.is_empty() {
         info!(
-            "Loaded {} action IDs from cache",
-            format_number(cached_ids.len())
+            "Loaded {} action IDs from {} cached resource(s)",
+            format_number(cache_data.action_ids.len()),
+            cache_data.fetched_resources.len()
         );
     }
 
@@ -179,21 +238,17 @@ pub async fn setup_auth_and_existing_ids(
     if cache_only {
         info!(
             "Cache mode: using {} cached IDs, skipping report fetching",
-            format_number(cached_ids.len())
+            format_number(cache_data.action_ids.len())
         );
-        // Ensure cache file exists even in cache-only mode
-        if let Err(e) = write_cache(&cached_ids) {
-            tracing::warn!("Failed to write action ID cache: {}", e);
-        }
         if only_parse {
-            return Ok((None, cached_ids));
+            return Ok((None, cache_data.action_ids));
         }
-        return Ok((Some(auth_client), cached_ids));
+        return Ok((Some(auth_client), cache_data.action_ids));
     }
 
     let report_client = ReportClient::new(config.clone(), auth_client.clone());
     let report_ids = report_client
-        .get_existing_action_ids()
+        .get_existing_action_ids(&cache_data.fetched_resources)
         .await
         .context("Failed to fetch existing action IDs from report")?;
     info!(
@@ -201,7 +256,7 @@ pub async fn setup_auth_and_existing_ids(
         format_number(report_ids.len())
     );
 
-    let mut all_ids = cached_ids;
+    let mut all_ids = cache_data.action_ids;
     let before_merge = all_ids.len();
     all_ids.extend(report_ids);
     let new_from_reports = all_ids.len() - before_merge;
@@ -211,15 +266,6 @@ pub async fn setup_auth_and_existing_ids(
         format_number(all_ids.len()),
         format_number(new_from_reports)
     );
-
-    if let Err(e) = write_cache(&all_ids) {
-        tracing::warn!("Failed to write action ID cache: {}", e);
-    } else {
-        info!(
-            "Updated cache with {} action IDs",
-            format_number(all_ids.len())
-        );
-    }
 
     if only_parse {
         info!(
