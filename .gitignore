@@ -5,3 +5,4 @@ input/
 .DS_Store
 .env.store
 .env.test
+cache/

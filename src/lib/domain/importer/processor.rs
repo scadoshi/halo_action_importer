@@ -147,7 +147,6 @@ pub async fn process_csv_file(
                                     ticket_ids.join(", ")
                                 );
                             }
-                            // Append imported IDs to cache
                             let imported_ids: Vec<String> =
                                 batch.iter().map(|a| a.action_id().to_string()).collect();
                             if let Err(e) = append_batch_to_cache(&imported_ids) {
@@ -258,7 +257,6 @@ pub async fn process_csv_file(
                             ticket_ids.join(", ")
                         );
                     }
-                    // Append imported IDs to cache
                     let imported_ids: Vec<String> =
                         batch.iter().map(|a| a.action_id().to_string()).collect();
                     if let Err(e) = append_batch_to_cache(&imported_ids) {
@@ -454,7 +452,6 @@ pub async fn process_excel_file(
                                     ticket_ids.join(", ")
                                 );
                             }
-                            // Append imported IDs to cache
                             let imported_ids: Vec<String> =
                                 batch.iter().map(|a| a.action_id().to_string()).collect();
                             if let Err(e) = append_batch_to_cache(&imported_ids) {
@@ -560,7 +557,6 @@ pub async fn process_excel_file(
                             ticket_ids.join(", ")
                         );
                     }
-                    // Append imported IDs to cache
                     let imported_ids: Vec<String> =
                         batch.iter().map(|a| a.action_id().to_string()).collect();
                     if let Err(e) = append_batch_to_cache(&imported_ids) {

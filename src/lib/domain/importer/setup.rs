@@ -161,7 +161,6 @@ pub async fn setup_auth_and_existing_ids(
     only_parse: bool,
     cache_only: bool,
 ) -> anyhow::Result<(Option<Arc<AuthClient>>, HashSet<String>)> {
-    // Read cached IDs first
     let cached_ids = read_cached_ids();
     if !cached_ids.is_empty() {
         info!(
@@ -177,13 +176,12 @@ pub async fn setup_auth_and_existing_ids(
         .context("Failed to authenticate with Halo API")?;
     info!("Authentication successful");
 
-    // If cache_only, skip report fetching entirely
     if cache_only {
         info!(
             "Cache mode: using {} cached IDs, skipping report fetching",
             format_number(cached_ids.len())
         );
-        // Still write cache to ensure file exists
+        // Ensure cache file exists even in cache-only mode
         if let Err(e) = write_cache(&cached_ids) {
             tracing::warn!("Failed to write action ID cache: {}", e);
         }
@@ -203,7 +201,6 @@ pub async fn setup_auth_and_existing_ids(
         format_number(report_ids.len())
     );
 
-    // Merge cached and report IDs
     let mut all_ids = cached_ids;
     let before_merge = all_ids.len();
     all_ids.extend(report_ids);
@@ -215,7 +212,6 @@ pub async fn setup_auth_and_existing_ids(
         format_number(new_from_reports)
     );
 
-    // Write merged set back to cache
     if let Err(e) = write_cache(&all_ids) {
         tracing::warn!("Failed to write action ID cache: {}", e);
     } else {
@@ -270,7 +266,7 @@ pub async fn setup(
     cache_only: bool,
     input_path: &str,
 ) -> anyhow::Result<SetupResult> {
-    // Check for files FIRST before doing expensive ID fetching
+    // Fail fast if no files before expensive ID fetching
     let files_to_process = discover_files(input_path)?;
     if files_to_process.is_empty() {
         anyhow::bail!(
@@ -279,7 +275,6 @@ pub async fn setup(
         );
     }
 
-    // Now fetch existing IDs (this can take a long time unless cache_only)
     let (auth_client, existing_ids) =
         setup_auth_and_existing_ids(config, only_parse, cache_only).await?;
     let action_client = auth_client
