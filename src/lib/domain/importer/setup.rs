@@ -220,13 +220,11 @@ pub async fn setup_auth_and_existing_ids(
     cache_only: bool,
 ) -> anyhow::Result<(Option<Arc<AuthClient>>, HashSet<String>)> {
     let cache_data = read_cached_ids();
-    if !cache_data.action_ids.is_empty() {
-        info!(
-            "Loaded {} action IDs from {} cached resource(s)",
-            format_number(cache_data.action_ids.len()),
-            cache_data.fetched_resources.len()
-        );
-    }
+    info!(
+        "Cache: {} existing action IDs from {} resource(s)",
+        format_number(cache_data.action_ids.len()),
+        cache_data.fetched_resources.len()
+    );
 
     let auth_client = Arc::new(AuthClient::new(config.clone()));
     let _token = auth_client
