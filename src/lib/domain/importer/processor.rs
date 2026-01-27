@@ -36,12 +36,16 @@ struct ProcessConfig<'a> {
     batch_size: usize,
 }
 
-fn extract_error_type(error_str: &str) -> String {
-    if error_str.contains("not found")
+fn is_not_found_error(error_str: &str) -> bool {
+    error_str.contains("not found")
         || error_str.contains("Not Found")
         || error_str.contains("404")
         || error_str.contains("does not exist")
-        || error_str.contains("doesn't exist") {
+        || error_str.contains("doesn't exist")
+}
+
+fn extract_error_type(error_str: &str) -> String {
+    if is_not_found_error(error_str) {
         "Ticket not found".to_string()
     } else if error_str.contains("status 400") {
         "Validation error".to_string()
@@ -56,6 +60,92 @@ fn extract_error_type(error_str: &str) -> String {
     } else {
         "Unknown error".to_string()
     }
+}
+
+struct TicketGroupedResult {
+    missing_tickets: HashSet<u32>,
+    imported_actions: Vec<ActionObject>,
+    failed_actions: Vec<FailedAction>,
+}
+
+/// Efficiently identify missing tickets and import valid actions.
+/// Strategy: Group actions by ticket_id and retry each ticket group.
+/// When a ticket group fails, all actions for that ticket are marked as failed.
+async fn retry_by_ticket_groups(
+    client: &ActionClient,
+    batch: &[ActionObject],
+) -> TicketGroupedResult {
+    let mut result = TicketGroupedResult {
+        missing_tickets: HashSet::new(),
+        imported_actions: Vec::new(),
+        failed_actions: Vec::new(),
+    };
+
+    // Group actions by ticket_id
+    let mut ticket_groups: HashMap<u32, Vec<ActionObject>> = HashMap::new();
+    for action in batch {
+        ticket_groups
+            .entry(action.ticket_id)
+            .or_insert_with(Vec::new)
+            .push(action.clone());
+    }
+
+    info!(
+        "Batch failed with 'not found' error - retrying {} ticket groups",
+        ticket_groups.len()
+    );
+
+    // Try each ticket group
+    for (ticket_id, actions) in ticket_groups {
+        match client.post_action_objects(actions.clone()).await {
+            Ok(_) => {
+                // All actions for this ticket imported successfully
+                result.imported_actions.extend(actions);
+            }
+            Err(e) => {
+                let err_str = e.to_string();
+                if is_not_found_error(&err_str) {
+                    // This ticket doesn't exist, mark all its actions as failed
+                    result.missing_tickets.insert(ticket_id);
+                    warn!(
+                        "Ticket ID: {} not found - marking {} action(s) as failed",
+                        ticket_id,
+                        actions.len()
+                    );
+                    for action in actions {
+                        result.failed_actions.push(FailedAction {
+                            action,
+                            error_type: "Ticket not found".to_string(),
+                        });
+                    }
+                } else {
+                    // Other error type, mark all actions in this group as failed
+                    let error_type = extract_error_type(&err_str);
+                    error!(
+                        "Failed to import {} action(s) for ticket {}: {}",
+                        actions.len(),
+                        ticket_id,
+                        err_str
+                    );
+                    for action in actions {
+                        result.failed_actions.push(FailedAction {
+                            action,
+                            error_type: error_type.clone(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    info!(
+        "Ticket group retry complete: recovered {}/{} actions, identified {} missing ticket(s)",
+        result.imported_actions.len(),
+        batch.len(),
+        result.missing_tickets.len()
+    );
+
+    result
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -93,6 +183,7 @@ pub async fn process_csv_file(
     let mut pending_skips = 0usize;
     let mut batch: Vec<crate::domain::models::action_object::ActionObject> = Vec::new();
     let mut batch_start = Instant::now();
+    let mut batch_number = 0;
     if let Some(total) = total_rows {
         info!(
             "Processing sheet {} of {}: CSV file '{}' ({} rows)",
@@ -156,6 +247,7 @@ pub async fn process_csv_file(
                         Ok(_) => {
                             let batch_count = batch.len();
                             imported += batch_count;
+                            batch_number += 1;
 
                             // Calculate timing stats
                             let batch_time = batch_start.elapsed().as_secs_f64();
@@ -187,18 +279,13 @@ pub async fn process_csv_file(
                                     ids.dedup();
                                     ids
                                 };
-                                let ticket_ids_str = if ticket_ids.len() <= 3 {
-                                    ticket_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", ")
-                                } else {
-                                    format!("{}, {} more",
-                                        ticket_ids[0..3].iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", "),
-                                        ticket_ids.len() - 3)
-                                };
+                                let ticket_ids_str = ticket_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", ");
 
+                                let total_batches = total_rows.map(|t| (t as f64 / config.batch_size as f64).ceil() as usize).unwrap_or(0);
                                 info!(
                                     "Imported batch {}/{} ({} actions, tickets: {}) | {} total skipped | {:.2}s/action | ETA: {}",
-                                    (imported / config.batch_size),
-                                    total_rows.map(|t| (t as f64 / config.batch_size as f64).ceil() as usize).unwrap_or(0),
+                                    batch_number,
+                                    total_batches,
                                     batch_count,
                                     ticket_ids_str,
                                     format_number(skipped),
@@ -218,33 +305,92 @@ pub async fn process_csv_file(
                         }
                         Err(e) => {
                             let error_str = e.to_string();
-                            let error_type = extract_error_type(&error_str);
 
-                            for action in &batch {
-                                let action_id = action.action_id().to_string();
-                                let ticket_id = action.ticket_id;
-                                let is_not_found = error_str.contains("not found")
-                                    || error_str.contains("Not Found")
-                                    || error_str.contains("404")
-                                    || error_str.contains("does not exist")
-                                    || error_str.contains("doesn't exist");
-                                if is_not_found {
-                                    config.missing_tickets.insert(ticket_id);
+                            if is_not_found_error(&error_str) && batch.len() > 1 {
+                                // Use binary search to efficiently identify missing tickets
+                                warn!(
+                                    "Batch of {} actions failed with 'not found' error - using binary search to identify missing tickets",
+                                    batch.len()
+                                );
+
+                                let search_result = retry_by_ticket_groups(client, &batch).await;
+
+                                // Add identified missing tickets to skip set
+                                for ticket_id in &search_result.missing_tickets {
+                                    config.missing_tickets.insert(*ticket_id);
                                     warn!(
                                         "Ticket ID: {} not found - will skip future actions for this ticket",
                                         ticket_id
                                     );
                                 }
-                                let error_msg = format!(
-                                    "Failed to import action ID: {} (ticket ID: {}): {}",
-                                    action_id, ticket_id, e
+
+                                // Update imported count and cache
+                                let recovered = search_result.imported_actions.len();
+                                imported += recovered;
+
+                                if !search_result.imported_actions.is_empty() {
+                                    let imported_ids: Vec<String> = search_result
+                                        .imported_actions
+                                        .iter()
+                                        .map(|a| a.action_id().to_string())
+                                        .collect();
+                                    if let Err(e) = append_imported_ids_to_cache(&imported_ids) {
+                                        warn!("Failed to update cache: {}", e);
+                                    }
+
+                                    // Track timing for recovered actions
+                                    let avg_action_time = batch_start.elapsed().as_secs_f64() / batch.len() as f64;
+                                    for _ in 0..recovered {
+                                        row_times.push(avg_action_time);
+                                    }
+                                }
+
+                                // Add failed actions to the failed list
+                                for failed_action in search_result.failed_actions {
+                                    error!(
+                                        "Failed to import action ID: {} (ticket ID: {})",
+                                        failed_action.action.action_id(),
+                                        failed_action.action.ticket_id
+                                    );
+                                    failed.push(failed_action);
+                                }
+
+                                info!(
+                                    "Binary search complete: recovered {}/{} actions, identified {} missing ticket(s)",
+                                    recovered,
+                                    batch.len(),
+                                    search_result.missing_tickets.len()
                                 );
-                                error!("{}", error_msg);
-                                failed.push(FailedAction {
-                                    action: action.clone(),
-                                    error_type: error_type.clone(),
-                                });
+                            } else {
+                                // Not a "not found" error, or batch size is 1
+                                // Mark all as failed (existing behavior for other errors)
+                                let error_type = extract_error_type(&error_str);
+
+                                for action in &batch {
+                                    let action_id = action.action_id().to_string();
+                                    let ticket_id = action.ticket_id;
+
+                                    if is_not_found_error(&error_str) {
+                                        config.missing_tickets.insert(ticket_id);
+                                        warn!(
+                                            "Ticket ID: {} not found - will skip future actions for this ticket",
+                                            ticket_id
+                                        );
+                                    }
+
+                                    let error_msg = format!(
+                                        "Failed to import action ID: {} (ticket ID: {}): {}",
+                                        action_id, ticket_id, e
+                                    );
+                                    error!("{}", error_msg);
+
+                                    failed.push(FailedAction {
+                                        action: action.clone(),
+                                        error_type: error_type.clone(),
+                                    });
+                                }
                             }
+
                             batch.clear();
                             batch_start = Instant::now();
                         }
@@ -283,6 +429,7 @@ pub async fn process_csv_file(
                 Ok(_) => {
                     let batch_count = batch.len();
                     imported += batch_count;
+                    batch_number += 1;
 
                     // Calculate timing stats
                     let batch_time = batch_start.elapsed().as_secs_f64();
@@ -314,18 +461,13 @@ pub async fn process_csv_file(
                             ids.dedup();
                             ids
                         };
-                        let ticket_ids_str = if ticket_ids.len() <= 3 {
-                            ticket_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", ")
-                        } else {
-                            format!("{}, {} more",
-                                ticket_ids[0..3].iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", "),
-                                ticket_ids.len() - 3)
-                        };
+                        let ticket_ids_str = ticket_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", ");
 
+                        let total_batches = total_rows.map(|t| (t as f64 / config.batch_size as f64).ceil() as usize).unwrap_or(0);
                         info!(
                             "Imported batch {}/{} ({} actions, tickets: {}) | {} total skipped | {:.2}s/action | ETA: {}",
-                            (imported / config.batch_size),
-                            total_rows.map(|t| (t as f64 / config.batch_size as f64).ceil() as usize).unwrap_or(0),
+                            batch_number,
+                            total_batches,
                             batch_count,
                             ticket_ids_str,
                             format_number(skipped),
@@ -342,32 +484,95 @@ pub async fn process_csv_file(
                 }
                 Err(e) => {
                     let error_str = e.to_string();
-                    let error_type = extract_error_type(&error_str);
+                    let is_not_found = error_str.contains("not found")
+                        || error_str.contains("Not Found")
+                        || error_str.contains("404")
+                        || error_str.contains("does not exist")
+                        || error_str.contains("doesn't exist");
 
-                    for action in &batch {
-                        let action_id = action.action_id().to_string();
-                        let ticket_id = action.ticket_id;
-                        let is_not_found = error_str.contains("not found")
-                            || error_str.contains("Not Found")
-                            || error_str.contains("404")
-                            || error_str.contains("does not exist")
-                            || error_str.contains("doesn't exist");
-                        if is_not_found {
-                            config.missing_tickets.insert(ticket_id);
+                    if is_not_found && batch.len() > 1 {
+                        // Use binary search to efficiently identify missing tickets
+                        warn!(
+                            "Final batch of {} actions failed with 'not found' error - using binary search to identify missing tickets",
+                            batch.len()
+                        );
+
+                        let search_result = retry_by_ticket_groups(client, &batch).await;
+
+                        // Add identified missing tickets to skip set
+                        for ticket_id in &search_result.missing_tickets {
+                            config.missing_tickets.insert(*ticket_id);
                             warn!(
                                 "Ticket ID: {} not found - will skip future actions for this ticket",
                                 ticket_id
                             );
                         }
-                        let error_msg = format!(
-                            "Failed to import action ID: {} (ticket ID: {}): {}",
-                            action_id, ticket_id, e
+
+                        // Update imported count and cache
+                        let recovered = search_result.imported_actions.len();
+                        imported += recovered;
+
+                        if !search_result.imported_actions.is_empty() {
+                            let imported_ids: Vec<String> = search_result
+                                .imported_actions
+                                .iter()
+                                .map(|a| a.action_id().to_string())
+                                .collect();
+                            if let Err(e) = append_imported_ids_to_cache(&imported_ids) {
+                                warn!("Failed to update cache: {}", e);
+                            }
+
+                            // Track timing for recovered actions
+                            let avg_action_time = batch_start.elapsed().as_secs_f64() / batch.len() as f64;
+                            for _ in 0..recovered {
+                                row_times.push(avg_action_time);
+                            }
+                        }
+
+                        // Add failed actions to the failed list
+                        for failed_action in search_result.failed_actions {
+                            error!(
+                                "Failed to import action ID: {} (ticket ID: {})",
+                                failed_action.action.action_id(),
+                                failed_action.action.ticket_id
+                            );
+                            failed.push(failed_action);
+                        }
+
+                        info!(
+                            "Binary search complete: recovered {}/{} actions, identified {} missing ticket(s)",
+                            recovered,
+                            batch.len(),
+                            search_result.missing_tickets.len()
                         );
-                        error!("{}", error_msg);
-                        failed.push(FailedAction {
-                            action: action.clone(),
-                            error_type: error_type.clone(),
-                        });
+                    } else {
+                        // Not a "not found" error, or batch size is 1
+                        // Mark all as failed (existing behavior for other errors)
+                        let error_type = extract_error_type(&error_str);
+
+                        for action in &batch {
+                            let action_id = action.action_id().to_string();
+                            let ticket_id = action.ticket_id;
+
+                            if is_not_found {
+                                config.missing_tickets.insert(ticket_id);
+                                warn!(
+                                    "Ticket ID: {} not found - will skip future actions for this ticket",
+                                    ticket_id
+                                );
+                            }
+
+                            let error_msg = format!(
+                                "Failed to import action ID: {} (ticket ID: {}): {}",
+                                action_id, ticket_id, e
+                            );
+                            error!("{}", error_msg);
+
+                            failed.push(FailedAction {
+                                action: action.clone(),
+                                error_type: error_type.clone(),
+                            });
+                        }
                     }
                 }
             }
@@ -454,6 +659,7 @@ pub async fn process_excel_file(
     let mut pending_skips = 0usize;
     let mut batch: Vec<crate::domain::models::action_object::ActionObject> = Vec::new();
     let mut batch_start = Instant::now();
+    let mut batch_number = 0;
     info!(
         "Processing sheet {} of {}: Excel file '{}', sheet '{}' ({} rows)",
         config.sheet_number,
@@ -542,18 +748,13 @@ pub async fn process_excel_file(
                                     ids.dedup();
                                     ids
                                 };
-                                let ticket_ids_str = if ticket_ids.len() <= 3 {
-                                    ticket_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", ")
-                                } else {
-                                    format!("{}, {} more",
-                                        ticket_ids[0..3].iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", "),
-                                        ticket_ids.len() - 3)
-                                };
+                                let ticket_ids_str = ticket_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", ");
 
+                                let total_batches = (total_rows as f64 / config.batch_size as f64).ceil() as usize;
                                 info!(
                                     "Imported batch {}/{} ({} actions, tickets: {}) | {} total skipped | {:.2}s/action | ETA: {}",
-                                    (imported / config.batch_size),
-                                    ((total_rows as f64 / config.batch_size as f64).ceil() as usize),
+                                    batch_number,
+                                    total_batches,
                                     batch_count,
                                     ticket_ids_str,
                                     format_number(skipped),
@@ -573,33 +774,92 @@ pub async fn process_excel_file(
                         }
                         Err(e) => {
                             let error_str = e.to_string();
-                            let error_type = extract_error_type(&error_str);
 
-                            for action in &batch {
-                                let action_id = action.action_id().to_string();
-                                let ticket_id = action.ticket_id;
-                                let is_not_found = error_str.contains("not found")
-                                    || error_str.contains("Not Found")
-                                    || error_str.contains("404")
-                                    || error_str.contains("does not exist")
-                                    || error_str.contains("doesn't exist");
-                                if is_not_found {
-                                    config.missing_tickets.insert(ticket_id);
+                            if is_not_found_error(&error_str) && batch.len() > 1 {
+                                // Use binary search to efficiently identify missing tickets
+                                warn!(
+                                    "Batch of {} actions failed with 'not found' error - using binary search to identify missing tickets",
+                                    batch.len()
+                                );
+
+                                let search_result = retry_by_ticket_groups(client, &batch).await;
+
+                                // Add identified missing tickets to skip set
+                                for ticket_id in &search_result.missing_tickets {
+                                    config.missing_tickets.insert(*ticket_id);
                                     warn!(
                                         "Ticket ID: {} not found - will skip future actions for this ticket",
                                         ticket_id
                                     );
                                 }
-                                let error_msg = format!(
-                                    "Failed to import action ID: {} (ticket ID: {}): {}",
-                                    action_id, ticket_id, e
+
+                                // Update imported count and cache
+                                let recovered = search_result.imported_actions.len();
+                                imported += recovered;
+
+                                if !search_result.imported_actions.is_empty() {
+                                    let imported_ids: Vec<String> = search_result
+                                        .imported_actions
+                                        .iter()
+                                        .map(|a| a.action_id().to_string())
+                                        .collect();
+                                    if let Err(e) = append_imported_ids_to_cache(&imported_ids) {
+                                        warn!("Failed to update cache: {}", e);
+                                    }
+
+                                    // Track timing for recovered actions
+                                    let avg_action_time = batch_start.elapsed().as_secs_f64() / batch.len() as f64;
+                                    for _ in 0..recovered {
+                                        row_times.push(avg_action_time);
+                                    }
+                                }
+
+                                // Add failed actions to the failed list
+                                for failed_action in search_result.failed_actions {
+                                    error!(
+                                        "Failed to import action ID: {} (ticket ID: {})",
+                                        failed_action.action.action_id(),
+                                        failed_action.action.ticket_id
+                                    );
+                                    failed.push(failed_action);
+                                }
+
+                                info!(
+                                    "Binary search complete: recovered {}/{} actions, identified {} missing ticket(s)",
+                                    recovered,
+                                    batch.len(),
+                                    search_result.missing_tickets.len()
                                 );
-                                error!("{}", error_msg);
-                                failed.push(FailedAction {
-                                    action: action.clone(),
-                                    error_type: error_type.clone(),
-                                });
+                            } else {
+                                // Not a "not found" error, or batch size is 1
+                                // Mark all as failed (existing behavior for other errors)
+                                let error_type = extract_error_type(&error_str);
+
+                                for action in &batch {
+                                    let action_id = action.action_id().to_string();
+                                    let ticket_id = action.ticket_id;
+
+                                    if is_not_found_error(&error_str) {
+                                        config.missing_tickets.insert(ticket_id);
+                                        warn!(
+                                            "Ticket ID: {} not found - will skip future actions for this ticket",
+                                            ticket_id
+                                        );
+                                    }
+
+                                    let error_msg = format!(
+                                        "Failed to import action ID: {} (ticket ID: {}): {}",
+                                        action_id, ticket_id, e
+                                    );
+                                    error!("{}", error_msg);
+
+                                    failed.push(FailedAction {
+                                        action: action.clone(),
+                                        error_type: error_type.clone(),
+                                    });
+                                }
                             }
+
                             batch.clear();
                             batch_start = Instant::now();
                         }
@@ -638,6 +898,7 @@ pub async fn process_excel_file(
                 Ok(_) => {
                     let batch_count = batch.len();
                     imported += batch_count;
+                    batch_number += 1;
 
                     // Calculate timing stats
                     let batch_time = batch_start.elapsed().as_secs_f64();
@@ -669,18 +930,13 @@ pub async fn process_excel_file(
                             ids.dedup();
                             ids
                         };
-                        let ticket_ids_str = if ticket_ids.len() <= 3 {
-                            ticket_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", ")
-                        } else {
-                            format!("{}, {} more",
-                                ticket_ids[0..3].iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", "),
-                                ticket_ids.len() - 3)
-                        };
+                        let ticket_ids_str = ticket_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", ");
 
+                        let total_batches = (total_rows as f64 / config.batch_size as f64).ceil() as usize;
                         info!(
                             "Imported batch {}/{} ({} actions, tickets: {}) | {} total skipped | {:.2}s/action | ETA: {}",
-                            (imported / config.batch_size),
-                            ((total_rows as f64 / config.batch_size as f64).ceil() as usize),
+                            batch_number,
+                            total_batches,
                             batch_count,
                             ticket_ids_str,
                             format_number(skipped),
@@ -697,32 +953,95 @@ pub async fn process_excel_file(
                 }
                 Err(e) => {
                     let error_str = e.to_string();
-                    let error_type = extract_error_type(&error_str);
+                    let is_not_found = error_str.contains("not found")
+                        || error_str.contains("Not Found")
+                        || error_str.contains("404")
+                        || error_str.contains("does not exist")
+                        || error_str.contains("doesn't exist");
 
-                    for action in &batch {
-                        let action_id = action.action_id().to_string();
-                        let ticket_id = action.ticket_id;
-                        let is_not_found = error_str.contains("not found")
-                            || error_str.contains("Not Found")
-                            || error_str.contains("404")
-                            || error_str.contains("does not exist")
-                            || error_str.contains("doesn't exist");
-                        if is_not_found {
-                            config.missing_tickets.insert(ticket_id);
+                    if is_not_found && batch.len() > 1 {
+                        // Use binary search to efficiently identify missing tickets
+                        warn!(
+                            "Final batch of {} actions failed with 'not found' error - using binary search to identify missing tickets",
+                            batch.len()
+                        );
+
+                        let search_result = retry_by_ticket_groups(client, &batch).await;
+
+                        // Add identified missing tickets to skip set
+                        for ticket_id in &search_result.missing_tickets {
+                            config.missing_tickets.insert(*ticket_id);
                             warn!(
                                 "Ticket ID: {} not found - will skip future actions for this ticket",
                                 ticket_id
                             );
                         }
-                        let error_msg = format!(
-                            "Failed to import action ID: {} (ticket ID: {}): {}",
-                            action_id, ticket_id, e
+
+                        // Update imported count and cache
+                        let recovered = search_result.imported_actions.len();
+                        imported += recovered;
+
+                        if !search_result.imported_actions.is_empty() {
+                            let imported_ids: Vec<String> = search_result
+                                .imported_actions
+                                .iter()
+                                .map(|a| a.action_id().to_string())
+                                .collect();
+                            if let Err(e) = append_imported_ids_to_cache(&imported_ids) {
+                                warn!("Failed to update cache: {}", e);
+                            }
+
+                            // Track timing for recovered actions
+                            let avg_action_time = batch_start.elapsed().as_secs_f64() / batch.len() as f64;
+                            for _ in 0..recovered {
+                                row_times.push(avg_action_time);
+                            }
+                        }
+
+                        // Add failed actions to the failed list
+                        for failed_action in search_result.failed_actions {
+                            error!(
+                                "Failed to import action ID: {} (ticket ID: {})",
+                                failed_action.action.action_id(),
+                                failed_action.action.ticket_id
+                            );
+                            failed.push(failed_action);
+                        }
+
+                        info!(
+                            "Binary search complete: recovered {}/{} actions, identified {} missing ticket(s)",
+                            recovered,
+                            batch.len(),
+                            search_result.missing_tickets.len()
                         );
-                        error!("{}", error_msg);
-                        failed.push(FailedAction {
-                            action: action.clone(),
-                            error_type: error_type.clone(),
-                        });
+                    } else {
+                        // Not a "not found" error, or batch size is 1
+                        // Mark all as failed (existing behavior for other errors)
+                        let error_type = extract_error_type(&error_str);
+
+                        for action in &batch {
+                            let action_id = action.action_id().to_string();
+                            let ticket_id = action.ticket_id;
+
+                            if is_not_found {
+                                config.missing_tickets.insert(ticket_id);
+                                warn!(
+                                    "Ticket ID: {} not found - will skip future actions for this ticket",
+                                    ticket_id
+                                );
+                            }
+
+                            let error_msg = format!(
+                                "Failed to import action ID: {} (ticket ID: {}): {}",
+                                action_id, ticket_id, e
+                            );
+                            error!("{}", error_msg);
+
+                            failed.push(FailedAction {
+                                action: action.clone(),
+                                error_type: error_type.clone(),
+                            });
+                        }
                     }
                 }
             }
