@@ -139,39 +139,113 @@ Simplified to:
 
 ---
 
-## 6. Changed 'existing' Cache Format
+## 6. Restored JSON Cache Format with Resource Tracking
 
 ### Problem
-The `existing` cache file used JSON format with resource tracking:
+The `existing` cache was simplified to comma-separated format:
+```
+id1,id2,id3,id4,id5,...
+```
+
+While simpler, this format lost resource tracking, causing the application to re-fetch ALL reports from the API every run. For large datasets with millions of action IDs, this was inefficient and time-consuming.
+
+### Solution (2026-01-27)
+Restored **JSON format with resource tracking** in `cache/existing.json`:
 ```json
 [
   {
-    "resource_id": "report1",
+    "resource_id": "aa637f8f-0e94-48e4-8881-8e1ff08445ec",
     "action_ids": ["id1", "id2", "id3"]
   }
 ]
 ```
 
-This was complex and harder to read/edit manually.
-
-### Solution
-Changed to simple **comma-separated on single line**:
-```
-id1,id2,id3,id4,id5,...
-```
-
 **Files Modified:**
 - `src/lib/domain/importer/setup.rs`
-  - Updated `read_cached_ids()` to parse comma-separated format
-  - Updated `append_resource_to_cache()` to write comma-separated format
-  - Removed `ResourceCache` struct (no longer needed)
-  - Removed unused `Serialize` and `Deserialize` imports
+  - Added `ResourceCache` struct with `Serialize` and `Deserialize`
+  - Updated `RESOURCE_CACHE_FILE` to `cache/existing.json`
+  - Updated `read_cached_ids()` to parse JSON and populate `fetched_resources`
+  - Updated `append_resource_to_cache()` to write JSON with resource tracking
 
-**Trade-offs:**
-- ✅ Simpler format, easier to read/edit
-- ✅ One line instead of multi-line JSON
-- ⚠️ Lost resource tracking (app will re-fetch all reports each run)
-- User indicated this is acceptable: "don't worry about existing cache"
+**Benefits:**
+- ✅ Resource tracking works - skips already-fetched resources on subsequent runs
+- ✅ Saves API calls and time (especially for large datasets)
+- ✅ Incremental updates - can add new resources without re-fetching everything
+- ✅ Human-readable JSON format for debugging
+
+---
+
+## 7. Improved Timeout Resilience and Removed Wait Times
+
+### Problem
+The application would crash after 2-3 timeout errors:
+- Network send failures would immediately return errors and crash
+- Limited to 2 retry attempts per request
+- 60-second wait on 504 Gateway Timeout responses
+- 500ms delay between all POST requests
+- User observed that timeouts seemed to cascade, requiring application restart
+
+### Solution (2026-01-27)
+Implemented infinite retry on all timeout-related errors and removed all wait times:
+
+**Infinite Retry Logic:**
+- Network errors (connection failures, timeouts) now retry indefinitely with immediate retry
+- 504 Gateway Timeout responses retry indefinitely (was: wait 60s, limited retries)
+- 401 Unauthorized responses retry indefinitely after token refresh
+- Removed the `for attempt in 0..2` inner loop limitation
+- Only non-retryable errors (400, 500, etc.) will cause batch to fail
+
+**Removed Wait Times:**
+- Removed 500ms delay between POST requests
+- Removed 60-second wait on 504 Gateway Timeout (now retries immediately)
+
+**Files Modified:**
+- `src/lib/outbound/client/action.rs`
+  - Removed inner `for attempt in 0..2` loop
+  - Changed network send failures from immediate error return to retry with warning
+  - Removed 500ms sleep before POST requests
+  - Removed 60-second sleep on 504 responses
+  - Removed attempt limit on 401 responses
+- `src/lib/inbound/client.rs`
+  - Removed inner `for attempt in 0..2` loop and outer `'outer:` label
+  - Changed network send failures to retry indefinitely
+  - Removed 60-second sleep on 504 responses
+  - Removed attempt limit on 401 responses
+
+**Benefits:**
+- ✅ Application never crashes from timeouts - keeps retrying until success
+- ✅ Faster throughput - no artificial delays between requests
+- ✅ Better handling of unstable API connections
+- ✅ Immediate retry on errors instead of waiting 60 seconds
+
+**Example Log Output:**
+```
+WARN Network error sending POST request for action IDs ["12345"]: connection timeout - retrying immediately
+WARN Received 504 Gateway Timeout for action IDs ["12345"], retrying immediately
+```
+
+---
+
+## 8. Added Comma Formatting to Report ID Counts
+
+### Problem
+When fetching reports, large ID counts were displayed without commas, making them hard to read:
+```
+Report 1/5 complete: 1234567 IDs from uuid-1
+```
+
+### Solution (2026-01-27)
+Added `format_number()` formatting to report ID counts.
+
+**Files Modified:**
+- `src/lib/inbound/client.rs`
+  - Applied `format_number()` to `report_ids.len()` in success log
+
+**Example:**
+```
+Before: Report 1/5 complete: 1234567 IDs from uuid-1, 1,234,567 total new IDs
+After:  Report 1/5 complete: 1,234,567 IDs from uuid-1, 1,234,567 total new IDs
+```
 
 ---
 
@@ -198,11 +272,24 @@ id1,id2,id3,id4,id5,...
 
 ## Cache File Formats
 
-### `cache/existing`
-- **Format:** Comma-separated values on single line
-- **Purpose:** Track action IDs already existing in Halo (from reports)
-- **Example:** `12345,12346,12347,12348,...`
-- **Updated by:** `append_resource_to_cache()` after fetching reports
+### `cache/existing.json`
+- **Format:** JSON array of resource objects with action IDs
+- **Purpose:** Track which resources (reports) have been fetched and their action IDs
+- **Example:**
+  ```json
+  [
+    {
+      "resource_id": "aa637f8f-0e94-48e4-8881-8e1ff08445ec",
+      "action_ids": ["12345", "12346", "12347"]
+    },
+    {
+      "resource_id": "9a887d53-85fa-4928-a450-9aece690ade2",
+      "action_ids": ["12348", "12349"]
+    }
+  ]
+  ```
+- **Updated by:** `append_resource_to_cache()` after fetching each report
+- **Read by:** `read_cached_ids()` which populates both `action_ids` and `fetched_resources` sets
 
 ### `cache/imported`
 - **Format:** Line-separated values (one ID per line)
@@ -219,10 +306,10 @@ id1,id2,id3,id4,id5,...
 
 ## Next Steps / Future Improvements
 
-1. **Consider:** Add back resource tracking in separate file if re-fetching reports becomes too slow
+1. **Monitor:** Watch for performance with JSON cache format for very large datasets
 2. **Consider:** Add configuration for retry strategy (ticket-grouped vs one-by-one)
-3. **Monitor:** Watch for any performance issues with comma-separated format for very large caches
-4. **Test:** Verify cache format handles edge cases (empty files, whitespace, etc.)
+3. **Consider:** Add maximum retry limit configuration (currently retries indefinitely)
+4. **Test:** Verify JSON cache handles edge cases (malformed JSON, empty files, concurrent writes)
 
 ---
 
@@ -234,8 +321,15 @@ If you need to modify the retry logic:
 - Key insight: Group by ticket_id first, then retry groups independently
 - Ensure `missing_tickets` HashSet is updated to skip future actions for bad tickets
 
+If you need to modify timeout/retry behavior:
+- See main request loops in `src/lib/outbound/client/action.rs` and `src/lib/inbound/client.rs`
+- Current behavior: Retry indefinitely on network errors, 504s, and 401s
+- Only non-retryable errors (400, 500, etc.) cause failure
+- No wait times between retries - retries are immediate
+
 If you need to modify cache format:
 - See `read_cached_ids()` and `append_resource_to_cache()` in `src/lib/domain/importer/setup.rs`
-- Existing format is comma-separated on one line
-- Imported format is line-separated
+- Existing format is JSON with resource tracking (`cache/existing.json`)
+- Imported format is line-separated (`cache/imported`)
 - Both use file locking to prevent concurrent write issues
+- `ResourceCache` struct maps resource UUIDs to action ID arrays

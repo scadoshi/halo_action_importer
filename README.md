@@ -70,7 +70,7 @@ The application will:
 2. Fetch existing action IDs from the configured report(s)
 3. Process all CSV and Excel files in the `input/` directory
 4. Skip actions that already exist
-5. Import new actions with a 500ms delay between API calls
+5. Import new actions
 6. Generate a log file in the `log/` directory with a UTC timestamp
 
 ### Custom Input Directory
@@ -138,10 +138,20 @@ This is useful when you're confident the cache is up to date and want to skip th
 
 The application maintains two cache files in the `cache/` directory:
 
-1. **`cache/existing`** - Comma-separated list of action IDs from Halo reports (single line)
+1. **`cache/existing.json`** - JSON format tracking which resources (reports) have been fetched and their action IDs
+   ```json
+   [
+     {
+       "resource_id": "aa637f8f-0e94-48e4-8881-8e1ff08445ec",
+       "action_ids": ["12", "1234", "85656"]
+     },
+     {
+       "resource_id": "9a887d53-85fa-4928-a450-9aece690ade2",
+       "action_ids": ["3123312", "411", "4"]
+     }
+   ]
    ```
-   12,1234,85656,3123312,411,4,...
-   ```
+   This format allows the application to skip already-fetched resources on subsequent runs, avoiding redundant API calls.
 
 2. **`cache/imported`** - Line-separated list of imported action IDs (one per line)
    ```
@@ -152,6 +162,7 @@ The application maintains two cache files in the `cache/` directory:
 
 This allows the application to:
 - Skip actions that already exist in Halo
+- Skip already-fetched report resources to avoid redundant API calls
 - Skip actions that have been imported by this tool
 - Resume from where it left off after interruption
 
@@ -272,6 +283,7 @@ The application is designed to be resilient:
 - Missing tickets are detected and future actions for them are automatically skipped
 - Token expiration is handled automatically with refresh and retry
 - 401 Unauthorized responses trigger automatic token refresh and retry
+- Network errors, connection failures, and 504 Gateway Timeouts retry indefinitely
 - All errors are collected and reported in the final summary
 
 ### Smart Batch Retry (2026-01-27)
