@@ -132,31 +132,28 @@ cargo run --release -- --only-use-cache
 cargo run --release -- --oc
 ```
 
-This is useful when you're confident the cache (`cache/existing_action_ids.json`) is up to date and want to skip the time-consuming report fetching.
+This is useful when you're confident the cache is up to date and want to skip the time-consuming report fetching.
 
-The cache file is a JSON file that tracks which resources have been fetched:
+#### Cache Files (Updated 2026-01-27)
 
-```json
-[
-  {
-    "resource_id": "aa637f8f-0e94-48e4-8881-8e1ff08445ec",
-    "action_ids": ["12", "1234", "85656"]
-  },
-  {
-    "resource_id": "9a887d53-85fa-4928-a450-9aece690ade2",
-    "action_ids": ["3123312", "411", "4"]
-  },
-  {
-    "resource_id": "_imported",
-    "action_ids": ["999", "1000"]
-  }
-]
-```
+The application maintains two cache files in the `cache/` directory:
+
+1. **`cache/existing`** - Comma-separated list of action IDs from Halo reports (single line)
+   ```
+   12,1234,85656,3123312,411,4,...
+   ```
+
+2. **`cache/imported`** - Line-separated list of imported action IDs (one per line)
+   ```
+   999
+   1000
+   1001
+   ```
 
 This allows the application to:
-- Skip resources that have already been fetched (even across restarts)
-- Incrementally build the cache as each report completes
-- Track imported action IDs separately under `_imported`
+- Skip actions that already exist in Halo
+- Skip actions that have been imported by this tool
+- Resume from where it left off after interruption
 
 ### Parallel Execution
 
@@ -187,13 +184,20 @@ Each file should contain action data with the following required fields:
 
 Additional fields are allowed and will be ignored during deserialization.
 
-## Logging
+## Logging (Updated 2026-01-27)
 
-Logs are written to both:
-- Console (stdout)
-- Log file: `log/YYYY-MM-DD_HH-MM-SS.log` (UTC timestamp with seconds)
+### Directory-Based Logging
 
-All log entries include timestamps with seconds for precise tracking.
+Each run creates a timestamped directory containing multiple output files:
+
+**Directory**: `log/YYYY-MM-DD_HH-MM-SS/`
+
+**Files generated**:
+- **`full.log`** - Complete log of all messages (also shown on console)
+- **`retry.csv`** - Failed actions that need retry (if any failures occurred)
+- **`summary.json`** - Machine-readable statistics for the run
+
+All log entries include RFC 3339 timestamps for precise tracking.
 
 ### Log Levels
 
@@ -203,15 +207,15 @@ All log entries include timestamps with seconds for precise tracking.
 - `warn` - Warnings and non-critical errors (e.g., missing tickets)
 - `error` - Errors that prevent processing
 
-### Progress Updates
+### Progress Tracking (Updated 2026-01-27)
 
-- **Import mode**: Updates every 100 entries or 1 minute
-- **Parse-only mode**: Updates every 10,000 entries or 5 seconds
+Progress is shown through success logs for each import. **No periodic progress updates** - each successful import shows current position and estimated time remaining.
 
-Progress logs include:
-- Current row count and percentage complete
-- Number imported and skipped
-- Average time per row (based only on actual imports, not skips)
+Every successful import includes:
+- Current position (action X/Y or batch X/Y)
+- Action/ticket IDs
+- Cumulative skip count
+- Average time per action
 - Estimated time remaining (formatted as days/hours/minutes/seconds)
 
 ### Log Messages
@@ -221,16 +225,19 @@ Progress logs include:
 Skipped 1,234 entries (already exist)
 ```
 
-**Success Messages**: Each successful import is logged. When using `--batch-size` mode with batch size > 1:
-```
-Success: imported batch of 10 actions | action IDs: 12345, 12346, 12347 | ticket IDs: 67890, 67891
-```
-Note: Ticket IDs are deduplicated since multiple actions can belong to the same ticket.
+**Success Messages** (Updated 2026-01-27): Each successful import shows comprehensive progress:
 
 For batch size of 1 (default):
 ```
-Success: imported action ID: 12345 (ticket ID: 67890)
+INFO Imported action 1/10000 (ID: 12345, ticket: 67890) | 50 total skipped | 0.50s/row | ETA: 1h 23m 15s
 ```
+
+When using `--batch-size` mode with batch size > 1:
+```
+INFO Imported batch 1/200 (50 actions, tickets: 67890, 67891, 67892) | 50 total skipped | 0.05s/action | ETA: 8m 15s
+```
+
+**Note**: All ticket IDs are shown (no truncation). Ticket IDs are deduplicated since multiple actions can belong to the same ticket.
 
 **Missing Tickets**: When a ticket is not found, it's logged once and future actions for that ticket are skipped:
 ```
@@ -256,7 +263,7 @@ The application provides a comprehensive summary including:
   - Entries per minute
   - Average time per sheet
 
-## Error Handling
+## Error Handling (Updated 2026-01-27)
 
 The application is designed to be resilient:
 - Deserialization errors are logged and the row is skipped
@@ -266,6 +273,17 @@ The application is designed to be resilient:
 - Token expiration is handled automatically with refresh and retry
 - 401 Unauthorized responses trigger automatic token refresh and retry
 - All errors are collected and reported in the final summary
+
+### Smart Batch Retry (2026-01-27)
+
+When a batch fails with "not found" error, the application uses **ticket-grouped retry**:
+1. Groups all actions in the failed batch by `ticket_id`
+2. Retries each ticket group independently
+3. Successfully imports actions for valid tickets
+4. Marks all actions for missing tickets as failed
+5. Adds missing tickets to skip set
+
+This maximizes successful imports while minimizing API calls. For example, a batch of 50 actions with 2 missing tickets will make ~5-10 API calls instead of 50 individual retries.
 
 ### Token Management
 

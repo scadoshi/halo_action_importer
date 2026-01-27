@@ -35,10 +35,15 @@ pub fn setup_logging(only_parse: bool, log_level: tracing::Level) -> anyhow::Res
 
 ## Current Log Structure
 
-### Single File Output
-- **Location**: `log/YYYY-MM-DD_HH-MM-SS.log`
+### Directory-Based Output (Updated 2026-01-27)
+- **Location**: `log/YYYY-MM-DD_HH-MM-SS/` (directory, not single file)
 - **Format**: RFC 3339 timestamps + message
-- **Example**: `log/2025-12-24_18-43-07.log`
+- **Example**: `log/2026-01-27_05-35-26/`
+
+### Files Generated Per Run
+1. **full.log**: Complete log of all messages
+2. **retry.csv**: Failed actions that need retry (if any failures)
+3. **summary.json**: Machine-readable statistics
 
 ### Dual Output Targets
 1. **File**: No ANSI color codes, permanent record
@@ -76,24 +81,15 @@ INFO Processing sheet 1 of 9: Excel file 'IncidentJournals_LastModPriorToJune202
      sheet 'IncidentJournals_ClosedIncs_Las' (350,532 rows)
 ```
 
-### 3. Progress Updates (INFO)
-**Frequency**:
-- Import mode: Every 100 entries OR 60 seconds (whichever comes first)
-- Parse-only mode: Every 10,000 entries OR 5 seconds
+### 3. Progress Updates - REMOVED (2026-01-27)
+**Previous Behavior** (no longer implemented):
+- Periodic updates every 100 entries OR 60 seconds
+- Created noise in logs, made them harder to read
 
-**Format**:
-```
-INFO Progress [sheet 1 of 9: 'file.xlsx' - sheet 'SheetName']:
-     10,086/553,991 rows (1.8%), 263 imported, 9,550 skipped |
-     avg 1.33s/row | est. remaining: 8d 8h 25m 21s
-```
-
-**Components**:
-- Current row / total rows (percentage)
-- Cumulative imported count
-- Cumulative skipped count
-- Average time per row (only counts actual imports, not skips)
-- Estimated time remaining (formatted as days/hours/minutes/seconds)
+**Current Behavior**:
+- No periodic progress updates
+- Progress shown only through success logs (see section 5 below)
+- Each successful import shows current position and ETA
 
 ### 4. Skip Messages (INFO - Batched)
 **Purpose**: Reduce log clutter when many consecutive actions are skipped
@@ -107,22 +103,45 @@ INFO Skipped 1,234 entries (already exist)
 - Batch is posted
 - File processing completes
 
-### 5. Success Messages (INFO)
+### 5. Success Messages (INFO) - Enhanced (2026-01-27)
 
 **Batch Size = 1** (default):
 ```
-INFO Success: imported action ID: 4118078 (ticket ID: 174443)
+INFO Imported action 1/10000 (ID: 12345, ticket: 67890) | 50 total skipped | 0.50s/row | ETA: 1h 23m 15s
 ```
+
+**Components**:
+- Current action / total actions
+- Action ID and ticket ID
+- Cumulative skip count
+- Average time per row
+- Estimated time remaining
 
 **Batch Size > 1**:
 ```
-INFO Success: imported batch of 10 actions |
-     action IDs: 12345, 12346, 12347 |
-     ticket IDs: 67890, 67891
+INFO Imported batch 1/200 (50 actions, tickets: 67890, 67891, 67892, 67893) | 50 total skipped | 0.05s/action | ETA: 8m 15s
 ```
-**Note**: Ticket IDs are deduplicated (multiple actions can share same ticket)
+
+**Components**:
+- Current batch / total batches (using explicit counter, not calculated)
+- Number of actions in batch
+- **All ticket IDs** (no truncation, all tickets shown comma-separated)
+- Cumulative skip count
+- Average time per action
+- Estimated time remaining
+
+**Note**:
+- Ticket IDs are deduplicated (multiple actions can share same ticket)
+- Batch numbers use explicit counter (incremented on success) to avoid off-by-one errors
 
 ### 6. Warning Messages (WARN)
+
+**Ticket-Grouped Retry** (when batch fails with "not found" error):
+```
+WARN Batch failed with 'not found' error - retrying 3 ticket groups
+WARN Ticket ID: 438843 not found - marking 7 action(s) as failed
+INFO Ticket group retry complete: recovered 43/50 actions, identified 2 missing ticket(s)
+```
 
 **Missing Ticket** (logged once per ticket):
 ```

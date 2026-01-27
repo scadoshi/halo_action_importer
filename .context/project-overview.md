@@ -143,6 +143,7 @@ cargo run --release -- --op  # Parse-only mode
 ```
 
 ### Resuming After Failure
-- Cached IDs persist in `cache/` directory
-- Imported IDs tracked in `cache/imported_ids.txt`
+- Cached IDs persist in `cache/` directory:
+  - `cache/existing`: Comma-separated list of action IDs from Halo reports (updated 2026-01-27)
+  - `cache/imported`: Line-separated list of action IDs imported by this tool
 - Simply re-run: already-imported actions will be skipped

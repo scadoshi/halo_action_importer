@@ -439,21 +439,47 @@ async fn flush_batch(
             stats.imported += batch.len();
         }
         Err(e) => {
-            // Failure
+            // Failure - UPDATED 2026-01-27: Now uses ticket-grouped retry
             let error_str = e.to_string();
 
-            // Check for missing ticket
-            if error_str.contains("not found") || error_str.contains("404") {
-                let ticket_id = batch[0].ticket_id;
-                missing_tickets.insert(ticket_id);
-                warn!("Ticket ID: {} not found - will skip future actions for this ticket", ticket_id);
-            }
+            // If "not found" error and batch > 1, use ticket-grouped retry
+            if (error_str.contains("not found") || error_str.contains("404")) && batch.len() > 1 {
+                warn!("Batch failed with 'not found' error - using ticket-grouped retry");
 
-            // Log error for each action
-            for action in batch.iter() {
-                let error_msg = format!(
-                    "Failed to import action ID: {} (ticket ID: {}): {}",
-                    action.action_id.value(),
+                // Call retry_by_ticket_groups() - groups actions by ticket_id
+                // Retries each ticket group independently
+                // Successfully imports actions for valid tickets
+                // Marks all actions for missing tickets as failed
+                let result = retry_by_ticket_groups(action_client, batch).await;
+
+                // Update stats with recovered actions
+                stats.imported += result.imported_actions.len();
+                stats.failed.extend(result.failed_actions);
+
+                // Add missing tickets to skip set
+                for ticket_id in result.missing_tickets {
+                    missing_tickets.insert(ticket_id);
+                    warn!("Ticket ID: {} not found - will skip future actions for this ticket", ticket_id);
+                }
+
+                info!("Ticket group retry complete: recovered {}/{} actions, identified {} missing ticket(s)",
+                      result.imported_actions.len(),
+                      batch.len(),
+                      result.missing_tickets.len());
+            } else {
+                // Not a "not found" error, or batch size is 1
+                // Check for missing ticket
+                if error_str.contains("not found") || error_str.contains("404") {
+                    let ticket_id = batch[0].ticket_id;
+                    missing_tickets.insert(ticket_id);
+                    warn!("Ticket ID: {} not found - will skip future actions for this ticket", ticket_id);
+                }
+
+                // Log error for each action
+                for action in batch.iter() {
+                    let error_msg = format!(
+                        "Failed to import action ID: {} (ticket ID: {}): {}",
+                        action.action_id.value(),
                     action.ticket_id,
                     e
                 );
