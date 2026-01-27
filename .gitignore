@@ -6,3 +6,4 @@ input/
 .env.store
 .env.test
 cache/
+old_cache/
