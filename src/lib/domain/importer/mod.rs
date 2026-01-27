@@ -2,6 +2,6 @@ pub mod processor;
 pub mod setup;
 pub mod summary;
 
-pub use processor::{ProcessingStats, process_csv_file, process_excel_file};
+pub use processor::{FailedAction, ProcessingStats, process_csv_file, process_excel_file, write_retry_csv, write_summary_json};
 pub use setup::{SetupResult, append_imported_ids_to_cache, append_resource_to_cache, setup};
 pub use summary::{ImportSummary, log_summary};

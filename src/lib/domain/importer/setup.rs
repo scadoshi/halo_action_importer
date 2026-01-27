@@ -168,17 +168,26 @@ pub struct SetupResult {
     pub auth_client: Option<Arc<AuthClient>>,
 }
 
-pub fn setup_logging(only_parse: bool, log_level: tracing::Level) -> anyhow::Result<()> {
+pub fn setup_logging(only_parse: bool, log_level: tracing::Level) -> anyhow::Result<String> {
     std::fs::create_dir_all(LOG_DIR)
         .with_context(|| format!("Failed to create log directory: {}", LOG_DIR))?;
+
     let timestamp_str = Utc::now().format("%Y-%m-%d_%H-%M-%S");
-    let log_file_path = format!("{}/{}.log", LOG_DIR, timestamp_str);
+    let log_dir_path = format!("{}/{}", LOG_DIR, timestamp_str);
+
+    // Create the timestamped directory
+    std::fs::create_dir_all(&log_dir_path)
+        .with_context(|| format!("Failed to create timestamped log directory: {}", log_dir_path))?;
+
+    // Create full.log inside the directory
+    let log_file_path = format!("{}/full.log", log_dir_path);
     let log_file = OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(true)
         .open(&log_file_path)
         .with_context(|| format!("Failed to open log file: {}", log_file_path))?;
+
     let level_filter = if only_parse {
         LevelFilter::INFO
     } else {
@@ -203,7 +212,7 @@ pub fn setup_logging(only_parse: bool, log_level: tracing::Level) -> anyhow::Res
         info!("Parse-only mode: will skip API calls");
     }
     info!("Configuration loaded successfully");
-    Ok(())
+    Ok(log_dir_path)
 }
 
 pub async fn setup_auth_and_existing_ids(

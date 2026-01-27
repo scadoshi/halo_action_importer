@@ -2,7 +2,8 @@ use anyhow::Context;
 use halo_action_importer::{
     config::Config,
     domain::importer::{
-        ImportSummary, SetupResult, log_summary, process_csv_file, process_excel_file, setup,
+        FailedAction, ImportSummary, SetupResult, log_summary, process_csv_file, process_excel_file, setup,
+        write_retry_csv, write_summary_json,
     },
 };
 use std::ffi::OsStr;
@@ -46,7 +47,7 @@ async fn main() -> anyhow::Result<()> {
     let config =
         Config::from_env().context("Failed to load configuration from environment variables")?;
 
-    setup::setup_logging(only_parse, config.log_level)?;
+    let log_dir_path = setup::setup_logging(only_parse, config.log_level)?;
 
     let SetupResult {
         existing_ids,
@@ -78,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
     let mut total_actions_imported = 0;
     let mut total_actions_skipped = 0;
     let mut skipped_files: Vec<String> = Vec::new();
-    let mut failed_imports: Vec<(String, String)> = Vec::new();
+    let mut failed_imports: Vec<FailedAction> = Vec::new();
     let mut sheet_times: Vec<f64> = Vec::new();
     let start_time = Instant::now();
 
@@ -137,12 +138,28 @@ async fn main() -> anyhow::Result<()> {
             total_imported: total_actions_imported,
             total_skipped: total_actions_skipped,
             total_failed: failed_imports.len(),
-            skipped_files,
+            skipped_files: skipped_files.clone(),
             total_runtime_secs: total_runtime,
-            sheet_times,
+            sheet_times: sheet_times.clone(),
         },
         only_parse,
     );
+
+    // Write retry.csv and summary.json
+    if !failed_imports.is_empty() {
+        write_retry_csv(&log_dir_path, &failed_imports)?;
+    }
+
+    write_summary_json(
+        &log_dir_path,
+        total_actions_processed,
+        total_actions_imported,
+        total_actions_skipped,
+        &failed_imports,
+        total_runtime,
+        &skipped_files,
+        total_sheets,
+    )?;
 
     Ok(())
 }
