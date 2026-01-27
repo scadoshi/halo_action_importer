@@ -82,104 +82,118 @@ impl ReportClient {
                 .await
                 .context("Failed to get valid authentication token")?;
 
-            'outer: loop {
-                for attempt in 0..2 {
-                    let response = self
-                        .http_client
-                        .get(&report_url)
-                        .header("Authorization", &auth_token)
-                        .header("Content-Type", "application/json; charset=utf-8")
-                        .send()
-                        .await
-                        .context("failed to send report request")?;
-
-                    let status = response.status();
-
-                    if status == reqwest::StatusCode::GATEWAY_TIMEOUT {
+            loop {
+                let response = match self
+                    .http_client
+                    .get(&report_url)
+                    .header("Authorization", &auth_token)
+                    .header("Content-Type", "application/json; charset=utf-8")
+                    .send()
+                    .await
+                {
+                    Ok(resp) => resp,
+                    Err(e) => {
+                        // Network error, timeout, or connection failure - retry indefinitely
                         warn!(
-                            "Received 504 Gateway Timeout for report {} ({}), waiting 1 minute before retrying",
+                            "Network error fetching report {} ({}): {} - retrying immediately",
                             idx + 1,
-                            uuid
-                        );
-                        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-                        auth_token = self
-                            .auth_client
-                            .get_valid_token()
-                            .await
-                            .context("Failed to refresh authentication token after 504")?;
-                        continue 'outer;
-                    }
-
-                    if status == reqwest::StatusCode::UNAUTHORIZED && attempt == 0 {
-                        warn!(
-                            "Received 401 Unauthorized for report request, refreshing token and retrying"
+                            uuid,
+                            e
                         );
                         auth_token = self
                             .auth_client
                             .get_valid_token()
                             .await
-                            .context("Failed to refresh authentication token after 401")?;
+                            .context("Failed to refresh authentication token after network error")?;
                         continue;
                     }
+                };
 
-                    if !status.is_success() {
-                        let error_text = response
-                            .text()
-                            .await
-                            .unwrap_or_else(|_| "failed to get error response".to_string());
-                        error!(
-                            "Report request failed: status {}, error: {}",
-                            status, error_text
-                        );
-                        anyhow::bail!(
-                            "Report request failed: status {}, error: {}",
-                            status,
-                            error_text
-                        );
-                    }
+                let status = response.status();
 
-                    let report_data: Vec<ReportResponse> = match response
-                        .json()
-                        .await
-                        .context("failed to parse report response")
-                    {
-                        Ok(data) => data,
-                        Err(e) => {
-                            error!("Failed to parse report response: {}", e);
-                            return Err(e);
-                        }
-                    };
-
-                    if report_data.is_empty() {
-                        error!("Report response is empty");
-                        anyhow::bail!("Report response is empty");
-                    }
-
-                    let mut report_ids: Vec<String> = Vec::new();
-                    for row in &report_data {
-                        for id_str in row.action_ids.split(',') {
-                            let id_str = id_str.trim();
-                            if !id_str.is_empty() {
-                                report_ids.push(id_str.to_string());
-                                all_existing_ids.insert(id_str.to_string());
-                            }
-                        }
-                    }
-
-                    if let Err(e) = append_resource_to_cache(uuid, &report_ids) {
-                        warn!("Failed to cache IDs from report {}: {}", uuid, e);
-                    }
-
-                    info!(
-                        "Report {}/{} complete: {} IDs from {}, {} total new IDs",
+                if status == reqwest::StatusCode::GATEWAY_TIMEOUT {
+                    warn!(
+                        "Received 504 Gateway Timeout for report {} ({}), retrying immediately",
                         idx + 1,
-                        to_fetch.len(),
-                        report_ids.len(),
-                        uuid,
-                        format_number(all_existing_ids.len())
+                        uuid
                     );
-                    break 'outer;
+                    auth_token = self
+                        .auth_client
+                        .get_valid_token()
+                        .await
+                        .context("Failed to refresh authentication token after 504")?;
+                    continue;
                 }
+
+                if status == reqwest::StatusCode::UNAUTHORIZED {
+                    warn!(
+                        "Received 401 Unauthorized for report request, refreshing token and retrying"
+                    );
+                    auth_token = self
+                        .auth_client
+                        .get_valid_token()
+                        .await
+                        .context("Failed to refresh authentication token after 401")?;
+                    continue;
+                }
+
+                if !status.is_success() {
+                    let error_text = response
+                        .text()
+                        .await
+                        .unwrap_or_else(|_| "failed to get error response".to_string());
+                    error!(
+                        "Report request failed: status {}, error: {}",
+                        status, error_text
+                    );
+                    anyhow::bail!(
+                        "Report request failed: status {}, error: {}",
+                        status,
+                        error_text
+                    );
+                }
+
+                let report_data: Vec<ReportResponse> = match response
+                    .json()
+                    .await
+                    .context("failed to parse report response")
+                {
+                    Ok(data) => data,
+                    Err(e) => {
+                        error!("Failed to parse report response: {}", e);
+                        return Err(e);
+                    }
+                };
+
+                if report_data.is_empty() {
+                    error!("Report response is empty");
+                    anyhow::bail!("Report response is empty");
+                }
+
+                let mut report_ids: Vec<String> = Vec::new();
+                for row in &report_data {
+                    for id_str in row.action_ids.split(',') {
+                        let id_str = id_str.trim();
+                        if !id_str.is_empty() {
+                            report_ids.push(id_str.to_string());
+                            all_existing_ids.insert(id_str.to_string());
+                        }
+                    }
+                }
+
+                if let Err(e) = append_resource_to_cache(uuid, &report_ids) {
+                    warn!("Failed to cache IDs from report {}: {}", uuid, e);
+                }
+
+                info!(
+                    "Report {}/{} complete: {} IDs from {}, {} total new IDs",
+                    idx + 1,
+                    to_fetch.len(),
+                    format_number(report_ids.len()),
+                    uuid,
+                    format_number(all_existing_ids.len())
+                );
+                break;
             }
         }
 
