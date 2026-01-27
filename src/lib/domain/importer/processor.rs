@@ -327,6 +327,7 @@ pub async fn process_csv_file(
                                 // Update imported count and cache
                                 let recovered = search_result.imported_actions.len();
                                 imported += recovered;
+                                batch_number += 1;
 
                                 if !search_result.imported_actions.is_empty() {
                                     let imported_ids: Vec<String> = search_result
@@ -796,6 +797,7 @@ pub async fn process_excel_file(
                                 // Update imported count and cache
                                 let recovered = search_result.imported_actions.len();
                                 imported += recovered;
+                                batch_number += 1;
 
                                 if !search_result.imported_actions.is_empty() {
                                     let imported_ids: Vec<String> = search_result
