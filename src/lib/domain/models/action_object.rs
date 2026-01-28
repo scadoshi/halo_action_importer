@@ -1,5 +1,5 @@
 use chrono::{FixedOffset, NaiveDateTime, TimeZone};
-use serde::{Deserialize, Deserializer, Serialize, Serializer, ser::SerializeSeq};
+use serde::{ser::SerializeSeq, Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Debug, Clone)]
 pub struct ActionId(String);
@@ -54,6 +54,7 @@ pub struct ActionObject {
         alias = "actionDate",
         alias = "ActionDate",
         alias = "ACTIONDATE",
+        alias = "Actiondate",
         deserialize_with = "deserialize_action_date",
         skip_serializing_if = "Option::is_none"
     )]
