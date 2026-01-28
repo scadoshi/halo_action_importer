@@ -283,12 +283,14 @@ pub async fn process_csv_file(
 
                                 let total_batches = total_rows.map(|t| (t as f64 / config.batch_size as f64).ceil() as usize).unwrap_or(0);
                                 info!(
-                                    "Imported batch {}/{} ({} actions, tickets: {}) | {} total skipped | {:.2}s/action | ETA: {}",
+                                    "Imported batch {}/{} | {}/{} actions (tickets: {}) | {} total skipped | {:.2}s/batch, {:.2}s/action | ETA: {}",
                                     batch_number,
                                     total_batches,
-                                    batch_count,
+                                    imported,
+                                    total_rows.unwrap_or(0),
                                     ticket_ids_str,
                                     format_number(skipped),
+                                    batch_time,
                                     avg_row_time,
                                     format_eta(remaining_rows, avg_row_time)
                                 );
@@ -466,12 +468,14 @@ pub async fn process_csv_file(
 
                         let total_batches = total_rows.map(|t| (t as f64 / config.batch_size as f64).ceil() as usize).unwrap_or(0);
                         info!(
-                            "Imported batch {}/{} ({} actions, tickets: {}) | {} total skipped | {:.2}s/action | ETA: {}",
+                            "Imported batch {}/{} | {}/{} actions (tickets: {}) | {} total skipped | {:.2}s/batch, {:.2}s/action | ETA: {}",
                             batch_number,
                             total_batches,
-                            batch_count,
+                            imported,
+                            total_rows.unwrap_or(0),
                             ticket_ids_str,
                             format_number(skipped),
+                            batch_time,
                             avg_row_time,
                             format_eta(remaining_rows, avg_row_time)
                         );
@@ -753,12 +757,14 @@ pub async fn process_excel_file(
 
                                 let total_batches = (total_rows as f64 / config.batch_size as f64).ceil() as usize;
                                 info!(
-                                    "Imported batch {}/{} ({} actions, tickets: {}) | {} total skipped | {:.2}s/action | ETA: {}",
+                                    "Imported batch {}/{} | {}/{} actions (tickets: {}) | {} total skipped | {:.2}s/batch, {:.2}s/action | ETA: {}",
                                     batch_number,
                                     total_batches,
-                                    batch_count,
+                                    imported,
+                                    total_rows,
                                     ticket_ids_str,
                                     format_number(skipped),
+                                    batch_time,
                                     avg_row_time,
                                     format_eta(remaining_rows, avg_row_time)
                                 );
@@ -936,12 +942,14 @@ pub async fn process_excel_file(
 
                         let total_batches = (total_rows as f64 / config.batch_size as f64).ceil() as usize;
                         info!(
-                            "Imported batch {}/{} ({} actions, tickets: {}) | {} total skipped | {:.2}s/action | ETA: {}",
+                            "Imported batch {}/{} | {}/{} actions (tickets: {}) | {} total skipped | {:.2}s/batch, {:.2}s/action | ETA: {}",
                             batch_number,
                             total_batches,
-                            batch_count,
+                            imported,
+                            total_rows,
                             ticket_ids_str,
                             format_number(skipped),
+                            batch_time,
                             avg_row_time,
                             format_eta(remaining_rows, avg_row_time)
                         );
