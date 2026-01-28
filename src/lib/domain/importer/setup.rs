@@ -148,7 +148,7 @@ pub fn append_resource_to_cache(resource_id: &str, action_ids: &[String]) -> any
     Ok(())
 }
 
-/// Append imported action IDs to text file (append-only, safe for concurrent writes)
+/// Append imported action IDs to text file (with file locking for concurrent writes)
 pub fn append_imported_ids_to_cache(ids: &[String]) -> anyhow::Result<()> {
     if ids.is_empty() {
         return Ok(());
@@ -168,10 +168,15 @@ pub fn append_imported_ids_to_cache(ids: &[String]) -> anyhow::Result<()> {
             )
         })?;
 
+    // Acquire exclusive lock to prevent concurrent writes from other processes
+    file.lock_exclusive()
+        .with_context(|| "Failed to acquire exclusive lock on imported cache file")?;
+
     for id in ids {
         writeln!(file, "{}", id)?;
     }
 
+    // Lock is automatically released when file is dropped
     Ok(())
 }
 
