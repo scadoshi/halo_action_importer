@@ -307,9 +307,9 @@ pub async fn process_csv_file(
                             let error_str = e.to_string();
 
                             if is_not_found_error(&error_str) && batch.len() > 1 {
-                                // Use binary search to efficiently identify missing tickets
+                                // Use ticket-grouped retry to identify missing tickets
                                 warn!(
-                                    "Batch of {} actions failed with 'not found' error - using binary search to identify missing tickets",
+                                    "Batch of {} actions failed with 'not found' error - retrying by ticket groups",
                                     batch.len()
                                 );
 
@@ -357,7 +357,7 @@ pub async fn process_csv_file(
                                 }
 
                                 info!(
-                                    "Binary search complete: recovered {}/{} actions, identified {} missing ticket(s)",
+                                    "Ticket group retry complete: recovered {}/{} actions, identified {} missing ticket(s)",
                                     recovered,
                                     batch.len(),
                                     search_result.missing_tickets.len()
@@ -492,9 +492,9 @@ pub async fn process_csv_file(
                         || error_str.contains("doesn't exist");
 
                     if is_not_found && batch.len() > 1 {
-                        // Use binary search to efficiently identify missing tickets
+                        // Use ticket-grouped retry to identify missing tickets
                         warn!(
-                            "Final batch of {} actions failed with 'not found' error - using binary search to identify missing tickets",
+                            "Final batch of {} actions failed with 'not found' error - retrying by ticket groups",
                             batch.len()
                         );
 
@@ -541,7 +541,7 @@ pub async fn process_csv_file(
                         }
 
                         info!(
-                            "Binary search complete: recovered {}/{} actions, identified {} missing ticket(s)",
+                            "Ticket group retry complete: recovered {}/{} actions, identified {} missing ticket(s)",
                             recovered,
                             batch.len(),
                             search_result.missing_tickets.len()
@@ -777,9 +777,9 @@ pub async fn process_excel_file(
                             let error_str = e.to_string();
 
                             if is_not_found_error(&error_str) && batch.len() > 1 {
-                                // Use binary search to efficiently identify missing tickets
+                                // Use ticket-grouped retry to identify missing tickets
                                 warn!(
-                                    "Batch of {} actions failed with 'not found' error - using binary search to identify missing tickets",
+                                    "Batch of {} actions failed with 'not found' error - retrying by ticket groups",
                                     batch.len()
                                 );
 
@@ -827,7 +827,7 @@ pub async fn process_excel_file(
                                 }
 
                                 info!(
-                                    "Binary search complete: recovered {}/{} actions, identified {} missing ticket(s)",
+                                    "Ticket group retry complete: recovered {}/{} actions, identified {} missing ticket(s)",
                                     recovered,
                                     batch.len(),
                                     search_result.missing_tickets.len()
@@ -962,9 +962,9 @@ pub async fn process_excel_file(
                         || error_str.contains("doesn't exist");
 
                     if is_not_found && batch.len() > 1 {
-                        // Use binary search to efficiently identify missing tickets
+                        // Use ticket-grouped retry to identify missing tickets
                         warn!(
-                            "Final batch of {} actions failed with 'not found' error - using binary search to identify missing tickets",
+                            "Final batch of {} actions failed with 'not found' error - retrying by ticket groups",
                             batch.len()
                         );
 
@@ -1011,7 +1011,7 @@ pub async fn process_excel_file(
                         }
 
                         info!(
-                            "Binary search complete: recovered {}/{} actions, identified {} missing ticket(s)",
+                            "Ticket group retry complete: recovered {}/{} actions, identified {} missing ticket(s)",
                             recovered,
                             batch.len(),
                             search_result.missing_tickets.len()
