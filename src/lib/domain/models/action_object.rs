@@ -76,7 +76,9 @@ pub struct ActionObject {
         alias = "cfactionId",
         alias = "cfActionID",
         alias = "cfactionID",
-        alias = "cdactionId"
+        alias = "cdactionId",
+        alias = "actionId",
+        alias = "action_id"
     )]
     pub action_id: ActionId,
     #[serde(default = "default_is_import", rename = "_isimport")]

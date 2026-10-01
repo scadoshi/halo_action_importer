@@ -321,3 +321,27 @@ impl Excel for Reader {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn excel_serial_dates_count_days_from_the_1900_epoch_with_the_lotus_bug() {
+        let at = |y, m, d, h, min| {
+            NaiveDate::from_ymd_opt(y, m, d)
+                .unwrap()
+                .and_hms_opt(h, min, 0)
+                .unwrap()
+        };
+        assert_eq!(excel_serial_to_datetime(0.0), Some(at(1899, 12, 30, 0, 0)));
+        assert_eq!(
+            excel_serial_to_datetime(1.75),
+            Some(at(1899, 12, 31, 18, 0))
+        );
+        assert_eq!(
+            excel_serial_to_datetime(45658.5),
+            Some(at(2025, 1, 1, 12, 0))
+        );
+    }
+}
