@@ -1,49 +1,27 @@
 use anyhow::Context;
+use clap::Parser;
 use halo_action_importer::{
+    cli::Cli,
     config::Config,
     domain::importer::{
-        FailedAction, ImportSummary, SetupResult, log_summary, process_csv_file, process_excel_file, setup,
-        write_retry_csv, write_summary_json,
+        FailedAction, ImportSummary, SetupResult, format::format_number, log_summary,
+        process_csv_file, process_excel_file, setup, write_retry_csv, write_summary_json,
     },
 };
 use std::ffi::OsStr;
 use std::time::Instant;
 use tracing::{error, info};
 
-fn format_number(n: usize) -> String {
-    let s = n.to_string();
-    let mut result = String::new();
-    let chars: Vec<char> = s.chars().collect();
-    for (i, &ch) in chars.iter().enumerate() {
-        if i > 0 && (chars.len() - i).is_multiple_of(3) {
-            result.push(',');
-        }
-        result.push(ch);
-    }
-    result
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let args: Vec<String> = std::env::args().collect();
-    let only_parse = args
-        .iter()
-        .any(|arg| arg == "--only-parse-inputs" || arg == "--only-parse" || arg == "--op");
-    let cache_only = args
-        .iter()
-        .any(|arg| arg == "--only-use-cache" || arg == "--only-cache" || arg == "--oc");
-    let input_path = args
-        .iter()
-        .position(|arg| arg == "--input-path" || arg == "--input" || arg == "--ip")
-        .and_then(|i| args.get(i + 1))
-        .map(|s| s.as_str())
-        .unwrap_or("input");
-    let batch_size = args
-        .iter()
-        .position(|arg| arg == "--batch-size" || arg == "--batch" || arg == "--bs")
-        .and_then(|i| args.get(i + 1))
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(1);
+    let Cli {
+        only_parse,
+        cache_only,
+        input_path,
+        batch_size,
+    } = Cli::parse();
+    let input_path = input_path.as_str();
+    let batch_size = usize::from(batch_size);
     let config =
         Config::from_env().context("Failed to load configuration from environment variables")?;
 

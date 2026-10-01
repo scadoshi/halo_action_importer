@@ -1,3 +1,4 @@
+use super::format::{format_duration, format_eta, format_number};
 use crate::domain::importer::setup::append_imported_ids_to_cache;
 use crate::domain::models::action_object::ActionObject;
 use crate::inbound::file::{Reader, csv::Csv, excel::Excel};
@@ -86,7 +87,7 @@ async fn retry_by_ticket_groups(
     for action in batch {
         ticket_groups
             .entry(action.ticket_id)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(action.clone());
     }
 
@@ -274,14 +275,21 @@ pub async fn process_csv_file(
                                 );
                             } else {
                                 let ticket_ids: Vec<u32> = {
-                                    let mut ids: Vec<u32> = batch.iter().map(|a| a.ticket_id).collect();
+                                    let mut ids: Vec<u32> =
+                                        batch.iter().map(|a| a.ticket_id).collect();
                                     ids.sort_unstable();
                                     ids.dedup();
                                     ids
                                 };
-                                let ticket_ids_str = ticket_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", ");
+                                let ticket_ids_str = ticket_ids
+                                    .iter()
+                                    .map(|id| id.to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
 
-                                let total_batches = total_rows.map(|t| (t as f64 / config.batch_size as f64).ceil() as usize).unwrap_or(0);
+                                let total_batches = total_rows
+                                    .map(|t| (t as f64 / config.batch_size as f64).ceil() as usize)
+                                    .unwrap_or(0);
                                 info!(
                                     "Imported batch {}/{} | {}/{} actions (tickets: {}) | {} total skipped | {:.2}s/batch, {:.2}s/action | ETA: {}",
                                     batch_number,
@@ -342,7 +350,8 @@ pub async fn process_csv_file(
                                     }
 
                                     // Track timing for recovered actions
-                                    let avg_action_time = batch_start.elapsed().as_secs_f64() / batch.len() as f64;
+                                    let avg_action_time =
+                                        batch_start.elapsed().as_secs_f64() / batch.len() as f64;
                                     for _ in 0..recovered {
                                         row_times.push(avg_action_time);
                                     }
@@ -464,9 +473,15 @@ pub async fn process_csv_file(
                             ids.dedup();
                             ids
                         };
-                        let ticket_ids_str = ticket_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", ");
+                        let ticket_ids_str = ticket_ids
+                            .iter()
+                            .map(|id| id.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ");
 
-                        let total_batches = total_rows.map(|t| (t as f64 / config.batch_size as f64).ceil() as usize).unwrap_or(0);
+                        let total_batches = total_rows
+                            .map(|t| (t as f64 / config.batch_size as f64).ceil() as usize)
+                            .unwrap_or(0);
                         info!(
                             "Imported batch {}/{} | {}/{} actions (tickets: {}) | {} total skipped | {:.2}s/batch, {:.2}s/action | ETA: {}",
                             batch_number,
@@ -528,7 +543,8 @@ pub async fn process_csv_file(
                             }
 
                             // Track timing for recovered actions
-                            let avg_action_time = batch_start.elapsed().as_secs_f64() / batch.len() as f64;
+                            let avg_action_time =
+                                batch_start.elapsed().as_secs_f64() / batch.len() as f64;
                             for _ in 0..recovered {
                                 row_times.push(avg_action_time);
                             }
@@ -748,14 +764,20 @@ pub async fn process_excel_file(
                                 );
                             } else {
                                 let ticket_ids: Vec<u32> = {
-                                    let mut ids: Vec<u32> = batch.iter().map(|a| a.ticket_id).collect();
+                                    let mut ids: Vec<u32> =
+                                        batch.iter().map(|a| a.ticket_id).collect();
                                     ids.sort_unstable();
                                     ids.dedup();
                                     ids
                                 };
-                                let ticket_ids_str = ticket_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", ");
+                                let ticket_ids_str = ticket_ids
+                                    .iter()
+                                    .map(|id| id.to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
 
-                                let total_batches = (total_rows as f64 / config.batch_size as f64).ceil() as usize;
+                                let total_batches =
+                                    (total_rows as f64 / config.batch_size as f64).ceil() as usize;
                                 info!(
                                     "Imported batch {}/{} | {}/{} actions (tickets: {}) | {} total skipped | {:.2}s/batch, {:.2}s/action | ETA: {}",
                                     batch_number,
@@ -816,7 +838,8 @@ pub async fn process_excel_file(
                                     }
 
                                     // Track timing for recovered actions
-                                    let avg_action_time = batch_start.elapsed().as_secs_f64() / batch.len() as f64;
+                                    let avg_action_time =
+                                        batch_start.elapsed().as_secs_f64() / batch.len() as f64;
                                     for _ in 0..recovered {
                                         row_times.push(avg_action_time);
                                     }
@@ -938,9 +961,14 @@ pub async fn process_excel_file(
                             ids.dedup();
                             ids
                         };
-                        let ticket_ids_str = ticket_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", ");
+                        let ticket_ids_str = ticket_ids
+                            .iter()
+                            .map(|id| id.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ");
 
-                        let total_batches = (total_rows as f64 / config.batch_size as f64).ceil() as usize;
+                        let total_batches =
+                            (total_rows as f64 / config.batch_size as f64).ceil() as usize;
                         info!(
                             "Imported batch {}/{} | {}/{} actions (tickets: {}) | {} total skipped | {:.2}s/batch, {:.2}s/action | ETA: {}",
                             batch_number,
@@ -1002,7 +1030,8 @@ pub async fn process_excel_file(
                             }
 
                             // Track timing for recovered actions
-                            let avg_action_time = batch_start.elapsed().as_secs_f64() / batch.len() as f64;
+                            let avg_action_time =
+                                batch_start.elapsed().as_secs_f64() / batch.len() as f64;
                             for _ in 0..recovered {
                                 row_times.push(avg_action_time);
                             }
@@ -1101,58 +1130,13 @@ pub async fn process_excel_file(
     })
 }
 
-fn format_number(n: usize) -> String {
-    let s = n.to_string();
-    let mut result = String::new();
-    let chars: Vec<char> = s.chars().collect();
-    for (i, &ch) in chars.iter().enumerate() {
-        if i > 0 && (chars.len() - i).is_multiple_of(3) {
-            result.push(',');
-        }
-        result.push(ch);
-    }
-    result
-}
-
-fn format_duration(seconds: f64) -> String {
-    let total_seconds = seconds as u64;
-    let days = total_seconds / 86400;
-    let hours = (total_seconds % 86400) / 3600;
-    let minutes = (total_seconds % 3600) / 60;
-    let secs = total_seconds % 60;
-
-    let mut parts = Vec::new();
-    if days > 0 {
-        parts.push(format!("{}d", days));
-    }
-    if hours > 0 {
-        parts.push(format!("{}h", hours));
-    }
-    if minutes > 0 {
-        parts.push(format!("{}m", minutes));
-    }
-    if secs > 0 || parts.is_empty() {
-        parts.push(format!("{}s", secs));
-    }
-
-    parts.join(" ")
-}
-
-fn format_eta(remaining_rows: usize, avg_time_per_row: f64) -> String {
-    if avg_time_per_row == 0.0 {
-        return "unknown".to_string();
-    }
-    let remaining_secs = remaining_rows as f64 * avg_time_per_row;
-    format_duration(remaining_secs)
-}
-
 pub fn write_retry_csv(log_dir: &str, failed: &[FailedAction]) -> anyhow::Result<()> {
     let csv_path = format!("{}/retry.csv", log_dir);
     let file = File::create(&csv_path)?;
     let mut writer = Writer::from_writer(file);
 
     // Write header
-    writer.write_record(&[
+    writer.write_record([
         "ticket_id",
         "action_id",
         "actiondate",
@@ -1167,7 +1151,8 @@ pub fn write_retry_csv(log_dir: &str, failed: &[FailedAction]) -> anyhow::Result
         let action = &failed_action.action;
 
         // Format date for CSV (keep in Arizona time as input expects)
-        let date_str = action.actiondate
+        let date_str = action
+            .actiondate
             .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
             .unwrap_or_default();
 
@@ -1223,6 +1208,7 @@ struct ErrorTypeSummary {
     affected_tickets: Vec<u32>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn write_summary_json(
     log_dir: &str,
     total_processed: usize,
@@ -1236,7 +1222,8 @@ pub fn write_summary_json(
     let json_path = format!("{}/summary.json", log_dir);
 
     // Calculate skipped breakdown
-    let missing_ticket_count = failed.iter()
+    let missing_ticket_count = failed
+        .iter()
         .filter(|f| f.error_type == "Ticket not found")
         .count();
     let already_exists = total_skipped.saturating_sub(missing_ticket_count);
@@ -1259,8 +1246,9 @@ pub fn write_summary_json(
     // Group errors by type
     let mut error_map: HashMap<String, Vec<u32>> = HashMap::new();
     for failed_action in failed {
-        error_map.entry(failed_action.error_type.clone())
-            .or_insert_with(Vec::new)
+        error_map
+            .entry(failed_action.error_type.clone())
+            .or_default()
             .push(failed_action.action.ticket_id);
     }
 
@@ -1307,4 +1295,55 @@ pub fn write_summary_json(
 
     info!("Wrote summary to {}", json_path);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::models::action_object::ActionId;
+
+    #[test]
+    fn errors_are_classified_by_what_the_message_says() {
+        assert_eq!(
+            extract_error_type("ticket 12 not found"),
+            "Ticket not found"
+        );
+        assert_eq!(extract_error_type("HTTP 404"), "Ticket not found");
+        assert_eq!(
+            extract_error_type("status 400: bad note"),
+            "Validation error"
+        );
+        assert_eq!(extract_error_type("status 401"), "Authentication error");
+        assert_eq!(extract_error_type("status 504"), "Gateway timeout");
+        assert_eq!(extract_error_type("status 500"), "Server error");
+        assert_eq!(
+            extract_error_type("Action client not available"),
+            "Client unavailable"
+        );
+        assert_eq!(extract_error_type("something else"), "Unknown error");
+    }
+
+    #[test]
+    fn the_retry_csv_round_trips_through_the_importer_columns() {
+        let dir = std::env::temp_dir().join(format!("halo_retry_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 1, 15)
+            .unwrap()
+            .and_hms_opt(10, 0, 0)
+            .unwrap();
+        let failed = vec![FailedAction {
+            action: ActionObject::new(7, Some(date), None, "a, note", "who", ActionId::new("99")),
+            error_type: "Server error".to_string(),
+        }];
+
+        write_retry_csv(dir.to_str().unwrap(), &failed).unwrap();
+
+        let written = std::fs::read_to_string(dir.join("retry.csv")).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(
+            written,
+            "ticket_id,action_id,actiondate,actionwho,note,outcome,error_type\n\
+             7,99,2026-01-15 10:00:00,who,\"a, note\",Imported Note,Server error\n"
+        );
+    }
 }

@@ -1,5 +1,5 @@
 use chrono::{FixedOffset, NaiveDateTime, TimeZone};
-use serde::{ser::SerializeSeq, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, ser::SerializeSeq};
 
 #[derive(Debug, Clone)]
 pub struct ActionId(String);
@@ -215,29 +215,48 @@ impl ActionObject {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::Config;
-
     use super::*;
+    use chrono::NaiveDate;
 
     #[test]
-    fn serialize_action_object() {
-        let config = Config::from_env().unwrap();
+    fn serializes_to_the_shape_the_import_endpoint_takes() {
         let action_object =
             ActionObject::new(123, None, None, "testing..", "tester", ActionId::new("456"));
         let serialized: serde_json::Value = serde_json::to_value(&action_object).unwrap();
         assert_eq!(
             serialized,
             serde_json::json!({
-                "ticket_id": 123,
-                "actiondate": null,
-                "note": "testing..",
-                "outcome": "Imported Note",
-                "actionwho": "tester",
-                "customfields": [
-                    { "id": config.action_id_custom_field_id,"value": "456" }
-                ],
+                "__rowNum__": null,
                 "_isimport": true,
+                "actionwho": "tester",
+                "cfactionid": 456,
+                "customfields": [{ "name": "cfactionid", "value": 456 }],
+                "note": "testing..",
+                "note_html": "testing..",
+                "outcome": "Imported Note",
+                "requestid": 123,
+                "result": null,
+                "ticket_id": 123,
+                "who": "tester",
             })
         );
+    }
+
+    #[test]
+    fn an_action_date_is_read_as_arizona_time_and_sent_as_utc() {
+        let local = NaiveDate::from_ymd_opt(2026, 1, 15)
+            .unwrap()
+            .and_hms_opt(10, 0, 0)
+            .unwrap();
+        let action_object = ActionObject::new(1, Some(local), None, "n", "w", ActionId::new("1"));
+        let serialized: serde_json::Value = serde_json::to_value(&action_object).unwrap();
+        assert_eq!(serialized["datetime"], "2026-01-15T17:00:00.000Z");
+    }
+
+    #[test]
+    fn an_action_id_that_is_not_a_number_is_sent_as_zero() {
+        let action_object = ActionObject::new(1, None, None, "n", "w", ActionId::new("abc"));
+        let serialized: serde_json::Value = serde_json::to_value(&action_object).unwrap();
+        assert_eq!(serialized["cfactionid"], 0);
     }
 }

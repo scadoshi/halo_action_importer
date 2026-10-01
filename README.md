@@ -57,6 +57,8 @@ ACTION_ID_CUSTOM_FIELD_ID = 123
 
 ## Usage
 
+`cargo run --release -- --help` lists every option. Each has a long name and the shorter spellings shown below; an unknown flag or a bad value stops the run instead of being ignored.
+
 ### Standard Import Mode
 
 Place your CSV and Excel files in the `input/` directory, then run:

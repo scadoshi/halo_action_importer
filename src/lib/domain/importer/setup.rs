@@ -1,3 +1,4 @@
+use super::format::format_number;
 use crate::config::Config;
 use crate::inbound::client::ReportClient;
 use crate::outbound::client::{action::ActionClient, auth::AuthClient};
@@ -15,19 +16,6 @@ use tracing::info;
 use tracing_subscriber::{
     Registry, filter::LevelFilter, layer::SubscriberExt, util::SubscriberInitExt,
 };
-
-fn format_number(n: usize) -> String {
-    let s = n.to_string();
-    let mut result = String::new();
-    let chars: Vec<char> = s.chars().collect();
-    for (i, &ch) in chars.iter().enumerate() {
-        if i > 0 && (chars.len() - i).is_multiple_of(3) {
-            result.push(',');
-        }
-        result.push(ch);
-    }
-    result
-}
 
 const LOG_DIR: &str = "log";
 const CACHE_DIR: &str = "cache";
@@ -52,33 +40,29 @@ pub fn read_cached_ids() -> CacheData {
 
     // Read existing cache (JSON format)
     let existing_path = Path::new(RESOURCE_CACHE_FILE);
-    if existing_path.exists() {
-        if let Ok(contents) = std::fs::read_to_string(existing_path) {
-            if !contents.trim().is_empty() {
-                if let Ok(resources) = serde_json::from_str::<Vec<ResourceCache>>(&contents) {
-                    for resource in resources {
-                        fetched_resources.insert(resource.resource_id);
-                        for id in resource.action_ids {
-                            action_ids.insert(id);
-                        }
-                    }
-                }
+    if existing_path.exists()
+        && let Ok(contents) = std::fs::read_to_string(existing_path)
+        && !contents.trim().is_empty()
+        && let Ok(resources) = serde_json::from_str::<Vec<ResourceCache>>(&contents)
+    {
+        for resource in resources {
+            fetched_resources.insert(resource.resource_id);
+            for id in resource.action_ids {
+                action_ids.insert(id);
             }
         }
     }
 
     // Read imported IDs (simple text file, one ID per line) - keep as-is
     let txt_path = Path::new(IMPORTED_CACHE_FILE);
-    if txt_path.exists() {
-        if let Ok(file) = std::fs::File::open(txt_path) {
-            let reader = std::io::BufReader::new(file);
-            for line in std::io::BufRead::lines(reader) {
-                if let Ok(id) = line {
-                    let id = id.trim();
-                    if !id.is_empty() {
-                        action_ids.insert(id.to_string());
-                    }
-                }
+    if txt_path.exists()
+        && let Ok(file) = std::fs::File::open(txt_path)
+    {
+        let reader = std::io::BufReader::new(file);
+        for id in std::io::BufRead::lines(reader).map_while(Result::ok) {
+            let id = id.trim();
+            if !id.is_empty() {
+                action_ids.insert(id.to_string());
             }
         }
     }
@@ -102,6 +86,7 @@ pub fn append_resource_to_cache(resource_id: &str, action_ids: &[String]) -> any
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(RESOURCE_CACHE_FILE)
         .with_context(|| format!("Failed to open cache file: {}", RESOURCE_CACHE_FILE))?;
 
@@ -127,7 +112,7 @@ pub fn append_resource_to_cache(resource_id: &str, action_ids: &[String]) -> any
         existing.action_ids.sort();
     } else {
         // Add new resource
-        let mut unique_ids: Vec<String> = action_ids.iter().cloned().collect();
+        let mut unique_ids: Vec<String> = action_ids.to_vec();
         unique_ids.sort();
         unique_ids.dedup();
         resources.push(ResourceCache {
@@ -195,8 +180,12 @@ pub fn setup_logging(only_parse: bool, log_level: tracing::Level) -> anyhow::Res
     let log_dir_path = format!("{}/{}", LOG_DIR, timestamp_str);
 
     // Create the timestamped directory
-    std::fs::create_dir_all(&log_dir_path)
-        .with_context(|| format!("Failed to create timestamped log directory: {}", log_dir_path))?;
+    std::fs::create_dir_all(&log_dir_path).with_context(|| {
+        format!(
+            "Failed to create timestamped log directory: {}",
+            log_dir_path
+        )
+    })?;
 
     // Create full.log inside the directory
     let log_file_path = format!("{}/full.log", log_dir_path);
@@ -351,4 +340,33 @@ pub async fn setup(
         files_to_process,
         auth_client,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discovery_takes_spreadsheets_at_the_top_level_only_whatever_the_case() {
+        let dir = std::env::temp_dir().join(format!("halo_discover_{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("nested")).unwrap();
+        for name in ["a.csv", "b.XLSX", "c.xls", "notes.txt", "nested/d.csv"] {
+            std::fs::write(dir.join(name), "").unwrap();
+        }
+
+        let mut names: Vec<String> = discover_files(dir.to_str().unwrap())
+            .unwrap()
+            .into_iter()
+            .map(|(_, name)| name)
+            .collect();
+        names.sort();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(names, ["a.csv", "b.XLSX", "c.xls"]);
+    }
+
+    #[test]
+    fn a_missing_input_directory_is_named() {
+        let message = discover_files("/nonexistent/halo").unwrap_err().to_string();
+        assert!(message.contains("/nonexistent/halo"), "{message}");
+    }
 }

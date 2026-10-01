@@ -57,11 +57,10 @@ impl ActionClient {
                         "Network error sending POST request for action IDs {:?}: {} - retrying immediately",
                         action_ids, e
                     );
-                    auth_token = self
-                        .auth_client
-                        .get_valid_token()
-                        .await
-                        .context("Failed to refresh authentication token after network error")?;
+                    auth_token =
+                        self.auth_client.get_valid_token().await.context(
+                            "Failed to refresh authentication token after network error",
+                        )?;
                     continue;
                 }
             };
@@ -124,6 +123,7 @@ mod tests {
     use crate::{domain::models::action_object::ActionId, outbound::client::auth::AuthClient};
     use std::sync::Arc;
     #[tokio::test]
+    #[ignore = "posts a real action to the Halo instance in .env; run with --ignored"]
     async fn post_action_object() {
         let config = Config::from_env().unwrap();
         let auth_client = Arc::new(AuthClient::new(config.clone()));

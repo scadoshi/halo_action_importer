@@ -1,3 +1,4 @@
+use crate::domain::importer::format::format_number;
 use crate::{
     config::Config, domain::importer::setup::append_resource_to_cache,
     outbound::client::auth::AuthClient,
@@ -8,19 +9,6 @@ use serde::Deserialize;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::{error, info, warn};
-
-fn format_number(n: usize) -> String {
-    let s = n.to_string();
-    let mut result = String::new();
-    let chars: Vec<char> = s.chars().collect();
-    for (i, &ch) in chars.iter().enumerate() {
-        if i > 0 && (chars.len() - i).is_multiple_of(3) {
-            result.push(',');
-        }
-        result.push(ch);
-    }
-    result
-}
 
 #[derive(Debug, Deserialize)]
 struct ReportResponse {
@@ -100,11 +88,9 @@ impl ReportClient {
                             uuid,
                             e
                         );
-                        auth_token = self
-                            .auth_client
-                            .get_valid_token()
-                            .await
-                            .context("Failed to refresh authentication token after network error")?;
+                        auth_token = self.auth_client.get_valid_token().await.context(
+                            "Failed to refresh authentication token after network error",
+                        )?;
                         continue;
                     }
                 };
