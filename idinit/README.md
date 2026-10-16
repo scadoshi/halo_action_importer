@@ -26,7 +26,7 @@ That's it. No command line arguments, no configuration.
 - Supports both CSV (`.csv`) and Excel (`.xlsx`, `.xls`) files
 - Recognizes both `CFactionId` and `actionId` as ID columns (case-insensitive)
 - IDs must be numeric (u64)
-- Files are modified in place - make backups if needed!
+- Files are modified in place: make backups if needed!
 
 ## Why this exists
 
