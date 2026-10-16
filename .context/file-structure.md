@@ -106,8 +106,7 @@ pub mod outbound;
 ---
 
 ### config Module
-**File**: `src/lib/config.rs`
-**Purpose**: Load and validate configuration from environment variables
+**File**: `src/lib/config.rs` **Purpose**: Load and validate configuration from environment variables
 
 **Public Types**:
 - `Config` - Configuration struct
@@ -126,8 +125,7 @@ pub mod outbound;
 ---
 
 ### domain Module
-**Location**: `src/lib/domain/`
-**Purpose**: Business logic and orchestration
+**Location**: `src/lib/domain/` **Purpose**: Business logic and orchestration
 
 #### domain/importer
 **Purpose**: Core import orchestration
@@ -180,12 +178,10 @@ pub mod outbound;
 ---
 
 ### inbound Module
-**Location**: `src/lib/inbound/`
-**Purpose**: Read data from external sources
+**Location**: `src/lib/inbound/` **Purpose**: Read data from external sources
 
 #### inbound/client
-**File**: `src/lib/inbound/client.rs`
-**Purpose**: Fetch existing action IDs from Halo reports
+**File**: `src/lib/inbound/client.rs` **Purpose**: Fetch existing action IDs from Halo reports
 
 **Key Types**:
 - `ReportClient` - HTTP client for report API
@@ -223,8 +219,7 @@ pub mod outbound;
 ---
 
 ### outbound Module
-**Location**: `src/lib/outbound/`
-**Purpose**: Communicate with external APIs
+**Location**: `src/lib/outbound/` **Purpose**: Communicate with external APIs
 
 #### outbound/client
 **Files**:

@@ -59,8 +59,7 @@ pub fn setup_logging(only_parse: bool, log_level: tracing::Level) -> anyhow::Res
 | `WARN` | Warnings, non-critical errors | Missing tickets, cache write failures |
 | `ERROR` | Errors that prevent operations | API failures, deserialization errors |
 
-**Configuration**: Via `LOG_LEVEL` env var in `.env` file
-**Parse-Only Mode**: Forces `INFO` level regardless of config
+**Configuration**: Via `LOG_LEVEL` env var in `.env` file **Parse-Only Mode**: Forces `INFO` level regardless of config
 
 ## Log Message Types
 
@@ -92,8 +91,7 @@ INFO Processing sheet 1 of 9: Excel file 'IncidentJournals_LastModPriorToJune202
 - Each successful import shows current position and ETA
 
 ### 4. Skip Messages (INFO - Batched)
-**Purpose**: Reduce log clutter when many consecutive actions are skipped
-**Format**:
+**Purpose**: Reduce log clutter when many consecutive actions are skipped **Format**:
 ```
 INFO Skipped 1,234 entries (already exist)
 ```
