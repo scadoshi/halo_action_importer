@@ -6,6 +6,7 @@ input/
 .env.store
 .env.test
 *cache/
+idinit/target/*
 
 # Worktrees created by Claude Code sessions
 .claude/worktrees/
