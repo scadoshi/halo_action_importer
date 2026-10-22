@@ -7,8 +7,8 @@ use halo_action_importer::cli::Cli;
 use halo_action_importer::config::Config;
 use halo_action_importer::domain::importer::format::format_number;
 use halo_action_importer::domain::importer::{
-    FailedAction, ImportSummary, SetupResult, log_summary, process_csv_file, process_excel_file,
-    setup, write_retry_csv, write_summary_json,
+    FailedAction, ImportSummary, SetupOptions, SetupResult, log_summary, process_csv_file,
+    process_excel_file, setup, write_retry_csv, write_summary_json,
 };
 use tracing::{error, info};
 
@@ -32,7 +32,15 @@ async fn main() -> anyhow::Result<()> {
         action_client,
         files_to_process,
         auth_client: _,
-    } = setup::setup(&config, only_parse, cache_only, input_path).await?;
+    } = setup::setup(
+        &config,
+        SetupOptions {
+            only_parse,
+            cache_only,
+        },
+        input_path,
+    )
+    .await?;
 
     let total_sheets = files_to_process.len();
     info!("Processing files from directory: {}", input_path);

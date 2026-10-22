@@ -169,6 +169,14 @@ pub fn append_imported_ids_to_cache(ids: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The two command line switches setup reads: parse without posting, and
+/// trust the ID cache instead of fetching the reports. Both can be on.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SetupOptions {
+    pub only_parse: bool,
+    pub cache_only: bool,
+}
+
 pub struct SetupResult {
     pub existing_ids: HashSet<String>,
     pub action_client: Option<ActionClient>,
@@ -229,8 +237,7 @@ pub fn setup_logging(only_parse: bool, log_level: tracing::Level) -> anyhow::Res
 
 pub async fn setup_auth_and_existing_ids(
     config: &Config,
-    only_parse: bool,
-    cache_only: bool,
+    options: SetupOptions,
 ) -> anyhow::Result<(Option<Arc<AuthClient>>, HashSet<String>)> {
     let cache_data = read_cached_ids();
     info!(
@@ -246,12 +253,12 @@ pub async fn setup_auth_and_existing_ids(
         .context("Failed to authenticate with Halo API")?;
     info!("Authentication successful");
 
-    if cache_only {
+    if options.cache_only {
         info!(
             "Cache mode: using {} cached IDs, skipping report fetching",
             format_number(cache_data.action_ids.len())
         );
-        if only_parse {
+        if options.only_parse {
             return Ok((None, cache_data.action_ids));
         }
         return Ok((Some(auth_client), cache_data.action_ids));
@@ -278,7 +285,7 @@ pub async fn setup_auth_and_existing_ids(
         format_number(new_from_reports)
     );
 
-    if only_parse {
+    if options.only_parse {
         info!(
             "Parse-only mode: existing IDs fetched successfully, will skip API calls for imports"
         );
@@ -319,8 +326,7 @@ pub fn discover_files(input_path: &str) -> anyhow::Result<Vec<(PathBuf, String)>
 
 pub async fn setup(
     config: &Config,
-    only_parse: bool,
-    cache_only: bool,
+    options: SetupOptions,
     input_path: &str,
 ) -> anyhow::Result<SetupResult> {
     // Fail fast if no files before expensive ID fetching
@@ -332,8 +338,7 @@ pub async fn setup(
         );
     }
 
-    let (auth_client, existing_ids) =
-        setup_auth_and_existing_ids(config, only_parse, cache_only).await?;
+    let (auth_client, existing_ids) = setup_auth_and_existing_ids(config, options).await?;
     let action_client = auth_client
         .as_ref()
         .map(|auth| ActionClient::new(config.clone(), auth.clone()));
