@@ -1,5 +1,6 @@
-use super::format::format_number;
 use tracing::{info, warn};
+
+use super::format::format_number;
 
 pub struct ImportSummary {
     pub total_processed: usize,

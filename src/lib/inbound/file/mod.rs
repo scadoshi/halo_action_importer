@@ -1,9 +1,12 @@
 pub mod csv;
 pub mod excel;
 
+use std::ffi::OsString;
+use std::fs::FileType;
+use std::path::Path;
+
 pub use csv::{Csv, CsvActionIterator};
 pub use excel::{Excel, ExcelActionIterator};
-use std::{ffi::OsString, fs::FileType, path::Path};
 
 pub struct Reader;
 

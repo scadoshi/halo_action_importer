@@ -1,7 +1,10 @@
-use crate::{domain::models::action_object::ActionObject, inbound::file::Reader};
+use std::path::Path;
+
 use anyhow::Context;
 use csv::ReaderBuilder;
-use std::path::Path;
+
+use crate::domain::models::action_object::ActionObject;
+use crate::inbound::file::Reader;
 
 pub trait Csv {
     fn try_csv_to_action_objects(path: &Path) -> anyhow::Result<Vec<ActionObject>>;

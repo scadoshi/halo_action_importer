@@ -1,5 +1,6 @@
 use chrono::{FixedOffset, NaiveDateTime, TimeZone};
-use serde::{Deserialize, Deserializer, Serialize, Serializer, ser::SerializeSeq};
+use serde::ser::SerializeSeq;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Debug, Clone)]
 pub struct ActionId(String);
@@ -97,8 +98,9 @@ fn deserialize_action_date<'de, D>(deserializer: D) -> Result<Option<NaiveDateTi
 where
     D: Deserializer<'de>,
 {
-    use serde::de::{self, Visitor};
     use std::fmt;
+
+    use serde::de::{self, Visitor};
 
     struct ActionDateVisitor;
 
@@ -217,8 +219,9 @@ impl ActionObject {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use chrono::NaiveDate;
+
+    use super::*;
 
     #[test]
     fn serializes_to_the_shape_the_import_endpoint_takes() {

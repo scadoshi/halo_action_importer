@@ -1,14 +1,15 @@
-use crate::domain::importer::format::format_number;
-use crate::{
-    config::Config, domain::importer::setup::append_resource_to_cache,
-    outbound::client::auth::AuthClient,
-};
+use std::collections::HashSet;
+use std::sync::Arc;
+
 use anyhow::Context;
 use reqwest::Client as ReqwestClient;
 use serde::Deserialize;
-use std::collections::HashSet;
-use std::sync::Arc;
 use tracing::{error, info, warn};
+
+use crate::config::Config;
+use crate::domain::importer::format::format_number;
+use crate::domain::importer::setup::append_resource_to_cache;
+use crate::outbound::client::auth::AuthClient;
 
 #[derive(Debug, Deserialize)]
 struct ReportResponse {

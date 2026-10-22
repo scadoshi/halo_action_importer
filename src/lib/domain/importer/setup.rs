@@ -1,21 +1,25 @@
-use super::format::format_number;
-use crate::config::Config;
-use crate::inbound::client::ReportClient;
-use crate::outbound::client::{action::ActionClient, auth::AuthClient};
-use anyhow::Context;
-use chrono::Utc;
-use fs2::FileExt;
-use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+use anyhow::Context;
+use chrono::Utc;
+use fs2::FileExt;
+use serde::{Deserialize, Serialize};
 use tracing::info;
-use tracing_subscriber::{
-    Registry, filter::LevelFilter, layer::SubscriberExt, util::SubscriberInitExt,
-};
+use tracing_subscriber::Registry;
+use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+
+use super::format::format_number;
+use crate::config::Config;
+use crate::inbound::client::ReportClient;
+use crate::outbound::client::action::ActionClient;
+use crate::outbound::client::auth::AuthClient;
 
 const LOG_DIR: &str = "log";
 const CACHE_DIR: &str = "cache";

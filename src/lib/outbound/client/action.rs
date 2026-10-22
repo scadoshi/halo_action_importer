@@ -1,10 +1,12 @@
-use crate::{
-    config::Config, domain::models::action_object::ActionObject, outbound::client::auth::AuthClient,
-};
+use std::sync::Arc;
+
 use anyhow::Context;
 use reqwest::Client as ReqwestClient;
-use std::sync::Arc;
 use tracing::{error, warn};
+
+use crate::config::Config;
+use crate::domain::models::action_object::ActionObject;
+use crate::outbound::client::auth::AuthClient;
 
 #[derive(Debug, Clone)]
 pub struct ActionClient {
@@ -119,9 +121,11 @@ impl ActionClient {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{domain::models::action_object::ActionId, outbound::client::auth::AuthClient};
     use std::sync::Arc;
+
+    use super::*;
+    use crate::domain::models::action_object::ActionId;
+    use crate::outbound::client::auth::AuthClient;
     #[tokio::test]
     #[ignore = "posts a real action to the Halo instance in .env; run with --ignored"]
     async fn post_action_object() {

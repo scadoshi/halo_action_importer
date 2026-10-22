@@ -1,12 +1,15 @@
 pub mod token;
 
-use crate::{config::Config, outbound::client::auth::token::AuthToken};
+use std::sync::Arc;
+
 use anyhow::Context;
 use reqwest::Client as ReqwestClient;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::error;
+
+use crate::config::Config;
+use crate::outbound::client::auth::token::AuthToken;
 
 #[derive(Debug, Deserialize)]
 struct TokenResponse {
