@@ -22,6 +22,19 @@ fn excel_serial_to_datetime(serial: f64) -> Option<NaiveDateTime> {
     Some(NaiveDateTime::new(date, time))
 }
 
+/// Every header [`ActionObject`] reads the ticket id from. A numeric cell
+/// under one of these becomes a number, not text.
+const TICKET_ID_HEADERS: &[&str] = &[
+    "ticket_id",
+    "requestId",
+    "requestID",
+    "RequestId",
+    "RequestID",
+    "requestid",
+    "REQUESTID",
+    "request_id",
+];
+
 /// A ticket ID from a numeric cell: a whole number that fits a `u32`.
 fn ticket_id_from_float(value: f64) -> Option<u32> {
     let in_range = (0.0..=f64::from(u32::MAX)).contains(&value);
@@ -88,11 +101,7 @@ impl ExcelActionIterator {
                 || header == "actionDate"
                 || header == "ActionDate"
                 || header == "ACTIONDATE";
-            let is_numeric_field = header_lower == "requestid"
-                || header_lower == "request_id"
-                || header == "requestId"
-                || header == "RequestId"
-                || header == "REQUESTID";
+            let is_numeric_field = TICKET_ID_HEADERS.contains(&header.as_str());
             let cell_value = if idx < row.len() {
                 match &row[idx] {
                     Data::Empty => {
@@ -472,6 +481,27 @@ mod tests {
         let headers = ["request_id", "actionId", "actionWho", "note", "actionDate"];
         let mut iter = sheet(&headers, vec![row(Data::Float(12.0))]);
         assert_eq!(iter.next().unwrap().unwrap().ticket_id, 12);
+    }
+
+    #[test]
+    fn a_numeric_ticket_reads_under_every_ticket_header_the_model_accepts() {
+        for header in [
+            "ticket_id",
+            "requestId",
+            "requestID",
+            "RequestId",
+            "RequestID",
+            "requestid",
+            "REQUESTID",
+            "request_id",
+        ] {
+            let headers = [header, "actionId", "actionWho", "note", "actionDate"];
+            for cell in [Data::Float(12.0), Data::Int(12)] {
+                let mut iter = sheet(&headers, vec![row(cell.clone())]);
+                let ticket = iter.next().unwrap().map(|action| action.ticket_id);
+                assert_eq!(ticket, Ok(12), "{header} {cell:?}");
+            }
+        }
     }
 
     #[test]
