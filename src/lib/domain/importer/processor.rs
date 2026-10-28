@@ -9,7 +9,7 @@ use serde::Serialize;
 use tracing::{error, info, warn};
 
 use super::format::{format_duration, format_eta, format_number};
-use crate::domain::importer::setup::append_imported_ids_to_cache;
+use crate::domain::importer::setup::Cache;
 use crate::domain::models::action_object::{ActionId, ActionObject};
 use crate::inbound::file::Reader;
 use crate::inbound::file::csv::Csv;
@@ -38,6 +38,7 @@ struct ProcessConfig<'a> {
     only_parse: bool,
     missing_tickets: &'a mut HashSet<u32>,
     batch_size: usize,
+    cache: &'a Cache,
 }
 
 fn is_not_found_error(error_str: &str) -> bool {
@@ -163,6 +164,7 @@ pub async fn process_csv_file(
     total_sheets: usize,
     only_parse: bool,
     batch_size: usize,
+    cache: &Cache,
 ) -> anyhow::Result<ProcessingStats> {
     let mut missing_tickets: HashSet<u32> = HashSet::new();
     let config = ProcessConfig {
@@ -175,6 +177,7 @@ pub async fn process_csv_file(
         only_parse,
         missing_tickets: &mut missing_tickets,
         batch_size,
+        cache,
     };
     let iter = <Reader as Csv>::csv_action_iter(file_path)?;
     let total_rows = iter.total_rows();
@@ -309,7 +312,7 @@ pub async fn process_csv_file(
 
                             let imported_ids: Vec<String> =
                                 batch.iter().map(|a| a.action_id().to_string()).collect();
-                            if let Err(e) = append_imported_ids_to_cache(&imported_ids) {
+                            if let Err(e) = config.cache.record_imported(&imported_ids) {
                                 warn!("Failed to update cache with imported IDs: {}", e);
                             }
 
@@ -348,7 +351,7 @@ pub async fn process_csv_file(
                                         .iter()
                                         .map(|a| a.action_id().to_string())
                                         .collect();
-                                    if let Err(e) = append_imported_ids_to_cache(&imported_ids) {
+                                    if let Err(e) = config.cache.record_imported(&imported_ids) {
                                         warn!("Failed to update cache: {}", e);
                                     }
 
@@ -501,7 +504,7 @@ pub async fn process_csv_file(
 
                     let imported_ids: Vec<String> =
                         batch.iter().map(|a| a.action_id().to_string()).collect();
-                    if let Err(e) = append_imported_ids_to_cache(&imported_ids) {
+                    if let Err(e) = config.cache.record_imported(&imported_ids) {
                         warn!("Failed to update cache with imported IDs: {}", e);
                     }
                 }
@@ -541,7 +544,7 @@ pub async fn process_csv_file(
                                 .iter()
                                 .map(|a| a.action_id().to_string())
                                 .collect();
-                            if let Err(e) = append_imported_ids_to_cache(&imported_ids) {
+                            if let Err(e) = config.cache.record_imported(&imported_ids) {
                                 warn!("Failed to update cache: {}", e);
                             }
 
@@ -655,6 +658,7 @@ pub async fn process_excel_file(
     total_sheets: usize,
     only_parse: bool,
     batch_size: usize,
+    cache: &Cache,
 ) -> anyhow::Result<ProcessingStats> {
     let mut missing_tickets: HashSet<u32> = HashSet::new();
     let config = ProcessConfig {
@@ -670,6 +674,7 @@ pub async fn process_excel_file(
         only_parse,
         missing_tickets: &mut missing_tickets,
         batch_size,
+        cache,
     };
     let iter = <Reader as Excel>::excel_action_iter(file_path)?;
     let total_rows = iter.total_rows();
@@ -797,7 +802,7 @@ pub async fn process_excel_file(
 
                             let imported_ids: Vec<String> =
                                 batch.iter().map(|a| a.action_id().to_string()).collect();
-                            if let Err(e) = append_imported_ids_to_cache(&imported_ids) {
+                            if let Err(e) = config.cache.record_imported(&imported_ids) {
                                 warn!("Failed to update cache with imported IDs: {}", e);
                             }
 
@@ -836,7 +841,7 @@ pub async fn process_excel_file(
                                         .iter()
                                         .map(|a| a.action_id().to_string())
                                         .collect();
-                                    if let Err(e) = append_imported_ids_to_cache(&imported_ids) {
+                                    if let Err(e) = config.cache.record_imported(&imported_ids) {
                                         warn!("Failed to update cache: {}", e);
                                     }
 
@@ -988,7 +993,7 @@ pub async fn process_excel_file(
 
                     let imported_ids: Vec<String> =
                         batch.iter().map(|a| a.action_id().to_string()).collect();
-                    if let Err(e) = append_imported_ids_to_cache(&imported_ids) {
+                    if let Err(e) = config.cache.record_imported(&imported_ids) {
                         warn!("Failed to update cache with imported IDs: {}", e);
                     }
                 }
@@ -1028,7 +1033,7 @@ pub async fn process_excel_file(
                                 .iter()
                                 .map(|a| a.action_id().to_string())
                                 .collect();
-                            if let Err(e) = append_imported_ids_to_cache(&imported_ids) {
+                            if let Err(e) = config.cache.record_imported(&imported_ids) {
                                 warn!("Failed to update cache: {}", e);
                             }
 

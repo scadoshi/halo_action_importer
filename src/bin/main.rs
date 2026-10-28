@@ -8,7 +8,7 @@ use halo_action_importer::cli::Cli;
 use halo_action_importer::config::Config;
 use halo_action_importer::domain::importer::format::format_number;
 use halo_action_importer::domain::importer::{
-    FailedAction, ImportSummary, SetupOptions, SetupResult, exit_code, log_summary,
+    Cache, FailedAction, ImportSummary, SetupOptions, SetupResult, exit_code, log_summary,
     process_csv_file, process_excel_file, setup, write_retry_csv, write_summary_json,
 };
 use tracing::{error, info};
@@ -27,6 +27,7 @@ async fn main() -> anyhow::Result<ExitCode> {
         Config::from_env().context("Failed to load configuration from environment variables")?;
 
     let log_dir_path = setup::setup_logging(only_parse, config.log_level)?;
+    let cache = Cache::default();
 
     let SetupResult {
         existing_ids,
@@ -39,6 +40,7 @@ async fn main() -> anyhow::Result<ExitCode> {
             only_parse,
             cache_only,
         },
+        &cache,
         input_path,
     )
     .await?;
@@ -85,6 +87,7 @@ async fn main() -> anyhow::Result<ExitCode> {
                     total_sheets,
                     only_parse,
                     batch_size,
+                    &cache,
                 )
                 .await
             } else if ext_lower == "xlsx" || ext_lower == "xls" {
@@ -97,6 +100,7 @@ async fn main() -> anyhow::Result<ExitCode> {
                     total_sheets,
                     only_parse,
                     batch_size,
+                    &cache,
                 )
                 .await
             } else {

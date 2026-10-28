@@ -24,10 +24,8 @@ use crate::outbound::client::auth::AuthClient;
 
 const LOG_DIR: &str = "log";
 const CACHE_DIR: &str = "cache";
-const RESOURCE_CACHE_FILE: &str = "cache/existing.json";
 const RESOURCE_CACHE_FILE_NAME: &str = "existing.json";
 const RESOURCE_CACHE_LOCK_FILE_NAME: &str = "existing.json.lock";
-const IMPORTED_CACHE_FILE: &str = "cache/imported";
 const IMPORTED_CACHE_FILE_NAME: &str = "imported";
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -65,43 +63,148 @@ pub fn parse_action_ids<'a>(ids: impl IntoIterator<Item = &'a str>, source: &str
     parsed
 }
 
-/// Read cached action IDs from both existing (JSON format) and imported (line-separated) files.
-/// A resource cache that exists but cannot be read or parsed is an error naming the file.
-pub fn read_cached_ids() -> anyhow::Result<CacheData> {
-    read_cached_ids_in(Path::new(CACHE_DIR))
+/// The cache directory: `existing.json`, the ids each report returned, and
+/// `imported`, the ids this importer posted, one per line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cache {
+    dir: PathBuf,
 }
 
-fn read_cached_ids_in(cache_dir: &Path) -> anyhow::Result<CacheData> {
-    let mut action_ids = HashSet::new();
-    let mut fetched_resources = HashSet::new();
+impl Default for Cache {
+    /// The `cache` directory under the working directory.
+    fn default() -> Self {
+        Self::new(CACHE_DIR)
+    }
+}
 
-    for resource in read_resource_cache(&cache_dir.join(RESOURCE_CACHE_FILE_NAME))? {
-        action_ids.extend(parse_action_ids(
-            resource.action_ids.iter().map(String::as_str),
-            RESOURCE_CACHE_FILE,
-        ));
-        fetched_resources.insert(resource.resource_id);
+impl Cache {
+    pub fn new(dir: impl Into<PathBuf>) -> Self {
+        Self { dir: dir.into() }
     }
 
-    // Read imported IDs (simple text file, one ID per line)
-    let txt_path = cache_dir.join(IMPORTED_CACHE_FILE_NAME);
-    if txt_path.exists()
-        && let Ok(file) = std::fs::File::open(&txt_path)
-    {
-        let reader = std::io::BufReader::new(file);
-        let lines: Vec<String> = std::io::BufRead::lines(reader)
-            .map_while(Result::ok)
-            .collect();
-        action_ids.extend(parse_action_ids(
-            lines.iter().map(String::as_str),
-            IMPORTED_CACHE_FILE,
-        ));
+    /// Reads cached action IDs from both existing (JSON format) and imported (line-separated) files.
+    /// A resource cache that exists but cannot be read or parsed is an error naming the file.
+    pub fn read(&self) -> anyhow::Result<CacheData> {
+        let mut action_ids = HashSet::new();
+        let mut fetched_resources = HashSet::new();
+
+        let resource_path = self.dir.join(RESOURCE_CACHE_FILE_NAME);
+        let resource_source = resource_path.display().to_string();
+        for resource in read_resource_cache(&resource_path)? {
+            action_ids.extend(parse_action_ids(
+                resource.action_ids.iter().map(String::as_str),
+                &resource_source,
+            ));
+            fetched_resources.insert(resource.resource_id);
+        }
+
+        // Read imported IDs (simple text file, one ID per line)
+        let txt_path = self.dir.join(IMPORTED_CACHE_FILE_NAME);
+        if txt_path.exists()
+            && let Ok(file) = std::fs::File::open(&txt_path)
+        {
+            let reader = std::io::BufReader::new(file);
+            let lines: Vec<String> = std::io::BufRead::lines(reader)
+                .map_while(Result::ok)
+                .collect();
+            action_ids.extend(parse_action_ids(
+                lines.iter().map(String::as_str),
+                &txt_path.display().to_string(),
+            ));
+        }
+
+        Ok(CacheData {
+            action_ids,
+            fetched_resources,
+        })
     }
 
-    Ok(CacheData {
-        action_ids,
-        fetched_resources,
-    })
+    /// Merges a report's action IDs into the existing cache file (JSON format with resource tracking).
+    pub fn merge_report(&self, resource_id: &str, action_ids: &[ActionId]) -> anyhow::Result<()> {
+        if action_ids.is_empty() {
+            return Ok(());
+        }
+        let cache_dir = &self.dir;
+
+        std::fs::create_dir_all(cache_dir).with_context(|| {
+            format!("Failed to create cache directory: {}", cache_dir.display())
+        })?;
+        // Writers take a separate lock file, since the cache file itself is
+        // replaced by a rename on every write.
+        let lock_path = cache_dir.join(RESOURCE_CACHE_LOCK_FILE_NAME);
+        let lock = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .with_context(|| format!("Failed to open cache lock file: {}", lock_path.display()))?;
+        lock.lock_exclusive()
+            .with_context(|| "Failed to acquire exclusive lock on cache file")?;
+
+        let cache_path = cache_dir.join(RESOURCE_CACHE_FILE_NAME);
+        let mut resources = read_resource_cache(&cache_path)?;
+
+        // Merge with the resource's cached IDs as numbers, so `0042` and `42` are one ID.
+        // A cached entry that is not a number is kept as it was.
+        let position = resources.iter().position(|r| r.resource_id == resource_id);
+        let existing = position
+            .and_then(|index| resources.get(index))
+            .map(|r| r.action_ids.clone())
+            .unwrap_or_default();
+        let mut numeric: BTreeSet<ActionId> = action_ids.iter().copied().collect();
+        let mut other: Vec<String> = Vec::new();
+        for id in existing {
+            match id.parse::<ActionId>() {
+                Ok(parsed) => {
+                    numeric.insert(parsed);
+                }
+                Err(_) => other.push(id),
+            }
+        }
+        let mut merged: Vec<String> = numeric.iter().map(ActionId::to_string).collect();
+        merged.extend(other);
+        match position.and_then(|index| resources.get_mut(index)) {
+            Some(resource) => resource.action_ids = merged,
+            None => resources.push(ResourceCache {
+                resource_id: resource_id.to_string(),
+                action_ids: merged,
+            }),
+        }
+
+        // Serialize to JSON with pretty formatting
+        let json = serde_json::to_string_pretty(&resources)
+            .with_context(|| "Failed to serialize cache to JSON")?;
+
+        write_atomically(&cache_path, json.as_bytes())
+    }
+
+    /// Appends imported action IDs to the imported file, under a lock for concurrent writers.
+    pub fn record_imported(&self, ids: &[String]) -> anyhow::Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let path = self.dir.join(IMPORTED_CACHE_FILE_NAME);
+
+        std::fs::create_dir_all(&self.dir)
+            .with_context(|| format!("Failed to create cache directory: {}", self.dir.display()))?;
+
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .with_context(|| format!("Failed to open imported cache file: {}", path.display()))?;
+
+        // Acquire exclusive lock to prevent concurrent writes from other processes
+        file.lock_exclusive()
+            .with_context(|| "Failed to acquire exclusive lock on imported cache file")?;
+
+        for id in ids {
+            writeln!(file, "{}", id)?;
+        }
+
+        // Lock is automatically released when file is dropped
+        Ok(())
+    }
 }
 
 /// Reads the resource cache at `path`: nothing when the file is missing or
@@ -126,72 +229,6 @@ fn read_resource_cache(path: &Path) -> anyhow::Result<Vec<ResourceCache>> {
     })
 }
 
-/// Append action IDs to the existing cache file (JSON format with resource tracking)
-pub fn append_resource_to_cache(resource_id: &str, action_ids: &[ActionId]) -> anyhow::Result<()> {
-    append_resource_to_cache_in(Path::new(CACHE_DIR), resource_id, action_ids)
-}
-
-fn append_resource_to_cache_in(
-    cache_dir: &Path,
-    resource_id: &str,
-    action_ids: &[ActionId],
-) -> anyhow::Result<()> {
-    if action_ids.is_empty() {
-        return Ok(());
-    }
-
-    std::fs::create_dir_all(cache_dir)
-        .with_context(|| format!("Failed to create cache directory: {}", cache_dir.display()))?;
-
-    // Writers take a separate lock file, since the cache file itself is
-    // replaced by a rename on every write.
-    let lock_path = cache_dir.join(RESOURCE_CACHE_LOCK_FILE_NAME);
-    let lock = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&lock_path)
-        .with_context(|| format!("Failed to open cache lock file: {}", lock_path.display()))?;
-    lock.lock_exclusive()
-        .with_context(|| "Failed to acquire exclusive lock on cache file")?;
-
-    let cache_path = cache_dir.join(RESOURCE_CACHE_FILE_NAME);
-    let mut resources = read_resource_cache(&cache_path)?;
-
-    // Merge with the resource's cached IDs as numbers, so `0042` and `42` are one ID.
-    // A cached entry that is not a number is kept as it was.
-    let position = resources.iter().position(|r| r.resource_id == resource_id);
-    let existing = position
-        .and_then(|index| resources.get(index))
-        .map(|r| r.action_ids.clone())
-        .unwrap_or_default();
-    let mut numeric: BTreeSet<ActionId> = action_ids.iter().copied().collect();
-    let mut other: Vec<String> = Vec::new();
-    for id in existing {
-        match id.parse::<ActionId>() {
-            Ok(parsed) => {
-                numeric.insert(parsed);
-            }
-            Err(_) => other.push(id),
-        }
-    }
-    let mut merged: Vec<String> = numeric.iter().map(ActionId::to_string).collect();
-    merged.extend(other);
-    match position.and_then(|index| resources.get_mut(index)) {
-        Some(resource) => resource.action_ids = merged,
-        None => resources.push(ResourceCache {
-            resource_id: resource_id.to_string(),
-            action_ids: merged,
-        }),
-    }
-
-    // Serialize to JSON with pretty formatting
-    let json = serde_json::to_string_pretty(&resources)
-        .with_context(|| "Failed to serialize cache to JSON")?;
-
-    write_atomically(&cache_path, json.as_bytes())
-}
-
 /// Writes `contents` to a temporary file next to `path` and renames it over
 /// `path`, so a reader sees the old file or the new one, never half of one.
 fn write_atomically(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
@@ -210,38 +247,6 @@ fn write_atomically(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
         let _ = std::fs::remove_file(&temp_path);
         return Err(e).with_context(|| format!("Failed to write cache file: {}", path.display()));
     }
-    Ok(())
-}
-
-/// Append imported action IDs to text file (with file locking for concurrent writes)
-pub fn append_imported_ids_to_cache(ids: &[String]) -> anyhow::Result<()> {
-    if ids.is_empty() {
-        return Ok(());
-    }
-
-    std::fs::create_dir_all(CACHE_DIR)
-        .with_context(|| format!("Failed to create cache directory: {}", CACHE_DIR))?;
-
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(IMPORTED_CACHE_FILE)
-        .with_context(|| {
-            format!(
-                "Failed to open imported cache file: {}",
-                IMPORTED_CACHE_FILE
-            )
-        })?;
-
-    // Acquire exclusive lock to prevent concurrent writes from other processes
-    file.lock_exclusive()
-        .with_context(|| "Failed to acquire exclusive lock on imported cache file")?;
-
-    for id in ids {
-        writeln!(file, "{}", id)?;
-    }
-
-    // Lock is automatically released when file is dropped
     Ok(())
 }
 
@@ -314,8 +319,9 @@ pub fn setup_logging(only_parse: bool, log_level: tracing::Level) -> anyhow::Res
 pub async fn setup_auth_and_existing_ids(
     config: &Config,
     options: SetupOptions,
+    cache: &Cache,
 ) -> anyhow::Result<(Option<Arc<AuthClient>>, HashSet<ActionId>)> {
-    let cache_data = read_cached_ids()?;
+    let cache_data = cache.read()?;
     info!(
         "Cache: {} existing action IDs from {} resource(s)",
         format_number(cache_data.action_ids.len()),
@@ -342,7 +348,7 @@ pub async fn setup_auth_and_existing_ids(
 
     let report_client = ReportClient::new(config.clone(), auth_client.clone());
     let report_ids = report_client
-        .get_existing_action_ids(&cache_data.fetched_resources)
+        .get_existing_action_ids(cache, &cache_data.fetched_resources)
         .await
         .context("Failed to fetch existing action IDs from report")?;
     info!(
@@ -403,6 +409,7 @@ pub fn discover_files(input_path: &str) -> anyhow::Result<Vec<(PathBuf, String)>
 pub async fn setup(
     config: &Config,
     options: SetupOptions,
+    cache: &Cache,
     input_path: &str,
 ) -> anyhow::Result<SetupResult> {
     // Fail fast if no files before expensive ID fetching
@@ -414,7 +421,7 @@ pub async fn setup(
         );
     }
 
-    let (auth_client, existing_ids) = setup_auth_and_existing_ids(config, options).await?;
+    let (auth_client, existing_ids) = setup_auth_and_existing_ids(config, options, cache).await?;
     let action_client = auth_client
         .as_ref()
         .map(|auth| ActionClient::new(config.clone(), auth.clone()));
@@ -472,7 +479,7 @@ mod tests {
         .unwrap();
         std::fs::write(dir.join(IMPORTED_CACHE_FILE_NAME), "0100\n\nxyz\n").unwrap();
 
-        let cache = read_cached_ids_in(&dir).unwrap();
+        let cache = Cache::new(&dir).read().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
         let expected: HashSet<ActionId> = [42, 7, 100].into_iter().map(ActionId::new).collect();
         assert_eq!(cache.action_ids, expected);
@@ -488,7 +495,9 @@ mod tests {
         )
         .unwrap();
 
-        append_resource_to_cache_in(&dir, "r", &[ActionId::new(42), ActionId::new(10)]).unwrap();
+        Cache::new(&dir)
+            .merge_report("r", &[ActionId::new(42), ActionId::new(10)])
+            .unwrap();
 
         let written = std::fs::read_to_string(dir.join(RESOURCE_CACHE_FILE_NAME)).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
@@ -502,7 +511,7 @@ mod tests {
         let path = dir.join(RESOURCE_CACHE_FILE_NAME);
         std::fs::write(&path, "[{ not json").unwrap();
 
-        let result = append_resource_to_cache_in(&dir, "r", &[ActionId::new(1)]);
+        let result = Cache::new(&dir).merge_report("r", &[ActionId::new(1)]);
 
         let contents = std::fs::read_to_string(&path).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
@@ -521,7 +530,9 @@ mod tests {
         std::fs::write(&path, "[]").unwrap();
         let before = std::fs::metadata(&path).unwrap().ino();
 
-        append_resource_to_cache_in(&dir, "r", &[ActionId::new(1)]).unwrap();
+        Cache::new(&dir)
+            .merge_report("r", &[ActionId::new(1)])
+            .unwrap();
 
         let after = std::fs::metadata(&path).unwrap().ino();
         let mut names: Vec<String> = std::fs::read_dir(&dir)
@@ -539,7 +550,7 @@ mod tests {
         let dir = scratch_dir("cache_corrupt_read");
         std::fs::write(dir.join(RESOURCE_CACHE_FILE_NAME), "[{ not json").unwrap();
 
-        let result = read_cached_ids_in(&dir);
+        let result = Cache::new(&dir).read();
         std::fs::remove_dir_all(&dir).unwrap();
         let message = format!("{:#}", result.err().unwrap());
         assert!(message.contains("existing.json"), "{message}");

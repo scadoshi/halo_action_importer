@@ -8,7 +8,7 @@ use tracing::{error, info, warn};
 
 use crate::config::Config;
 use crate::domain::importer::format::format_number;
-use crate::domain::importer::setup::{append_resource_to_cache, parse_action_ids};
+use crate::domain::importer::setup::{Cache, parse_action_ids};
 use crate::domain::models::action_object::ActionId;
 use crate::outbound::client::auth::AuthClient;
 
@@ -38,6 +38,7 @@ impl ReportClient {
 
     pub async fn get_existing_action_ids(
         &self,
+        cache: &Cache,
         already_fetched: &HashSet<String>,
     ) -> anyhow::Result<HashSet<ActionId>> {
         let mut all_existing_ids = HashSet::new();
@@ -164,7 +165,7 @@ impl ReportClient {
                 );
                 all_existing_ids.extend(report_ids.iter().copied());
 
-                if let Err(e) = append_resource_to_cache(uuid, &report_ids) {
+                if let Err(e) = cache.merge_report(uuid, &report_ids) {
                     warn!("Failed to cache IDs from report {}: {}", uuid, e);
                 }
 
