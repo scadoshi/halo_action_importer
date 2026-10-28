@@ -1,16 +1,25 @@
+//! Settings read from `.env` and the environment.
+
 use anyhow::Context;
 use reqwest::Url;
 use tracing::Level;
 
+/// The importer's settings. `Debug` leaves out the client secret.
 #[derive(Clone)]
 pub struct Config {
+    /// The Halo instance's base URL, with its trailing slash.
     pub base_resource_url: Url,
+    /// The OAuth 2 token endpoint, `auth/token` under the base URL.
     pub token_url: Url,
+    /// The API application's client ID.
     pub client_id: String,
+    /// The API application's client secret.
     pub client_secret: String,
+    /// The UUIDs of the reports `--sync-from-halo` fetches; empty when unset.
     pub action_ids_resource_uuids: Vec<String>,
     /// The name of the action custom field that holds the action ID, such as `cfactionid`.
     pub action_id_custom_field: String,
+    /// The most detailed level that gets logged.
     pub log_level: Level,
 }
 
@@ -54,12 +63,21 @@ impl Config {
     }
 
     /// Reads `.env` when present, then the process environment.
+    ///
+    /// # Errors
+    ///
+    /// When a required variable is missing or a value is malformed.
     pub fn from_env() -> anyhow::Result<Self> {
         dotenvy::dotenv().ok();
         Self::from_lookup(|key| std::env::var(key).ok())
     }
 
     /// Builds the config from `lookup`, which answers `None` for an unset key.
+    ///
+    /// # Errors
+    ///
+    /// When a required variable is missing or a value is malformed; the
+    /// message names the variable.
     pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> anyhow::Result<Self> {
         let var = |key: &'static str| {
             lookup(key).with_context(|| format!("missing required environment variable: {key}"))

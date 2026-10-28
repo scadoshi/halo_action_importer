@@ -1,3 +1,5 @@
+//! Posts actions to Halo's import endpoint.
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,6 +23,8 @@ pub struct ActionClient {
 }
 
 impl ActionClient {
+    /// An action client that posts to the instance in `config`.
+    ///
     /// # Errors
     ///
     /// When the HTTP client cannot be built.
@@ -117,9 +121,17 @@ pub const TICKET_NOT_FOUND: &str = "Ticket not found";
 #[derive(Debug)]
 pub enum PostError {
     /// Halo answered 404: the ticket the actions belong to does not exist.
-    TicketNotFound { body: String },
+    TicketNotFound {
+        /// The reply's body.
+        body: String,
+    },
     /// Halo answered with any other error status.
-    Rejected { status: StatusCode, body: String },
+    Rejected {
+        /// The reply's status.
+        status: StatusCode,
+        /// The reply's body.
+        body: String,
+    },
     /// No reply came within the request timeout. Halo may still have stored the batch.
     Timeout(reqwest::Error),
     /// The request could not be sent or its reply could not be read.

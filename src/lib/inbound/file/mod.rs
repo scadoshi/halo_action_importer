@@ -1,3 +1,5 @@
+//! Reads CSV and Excel files as actions, row by row.
+
 pub mod csv;
 pub mod excel;
 
@@ -7,6 +9,7 @@ pub mod excel;
 pub struct RowError {
     /// The row's number as the file shows it.
     pub row: usize,
+    /// What was wrong, naming the file and the row.
     pub message: String,
 }
 

@@ -1,3 +1,6 @@
+//! Reads each file's rows, posts them in batches, and writes retry.csv,
+//! unparsed.csv and summary.json.
+
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ffi::OsStr;
 use std::fs::File;
@@ -16,18 +19,26 @@ use crate::inbound::file;
 use crate::inbound::file::RowError;
 use crate::outbound::client::action::{ActionClient, PostError, TICKET_NOT_FOUND};
 
+/// An action that did not get into Halo, and why.
 pub struct FailedAction {
+    /// The action as read from its file.
     pub action: ActionObject,
+    /// The kind of failure, as retry.csv and summary.json show it.
     pub error_type: String,
 }
 
+/// What one file came to.
 pub struct ProcessingStats {
+    /// Rows read, whatever became of them.
     pub processed: usize,
+    /// Actions Halo took.
     pub imported: usize,
+    /// Actions not posted: already in Halo, or for a missing ticket.
     pub skipped: usize,
     /// The skips that were for a ticket Halo answered 404 for; the rest were
     /// ids already in Halo. They go to retry.csv but do not count as failed.
     pub skipped_missing_ticket: Vec<FailedAction>,
+    /// Actions Halo did not take.
     pub failed: Vec<FailedAction>,
     /// Rows that did not read as actions.
     pub unparsed: Vec<RowError>,
@@ -35,7 +46,9 @@ pub struct ProcessingStats {
 
 /// A row that did not read as an action, and the file it is in.
 pub struct UnparsedRow {
+    /// The file's name.
     pub file: String,
+    /// The row and what was wrong with it.
     pub error: RowError,
 }
 
@@ -232,12 +245,16 @@ pub struct ProcessConfig<'a> {
 
 /// What a run over every file came to.
 pub struct RunTotals {
+    /// Rows read, whatever became of them.
     pub processed: usize,
+    /// Actions Halo took.
     pub imported: usize,
+    /// Actions not posted: already in Halo, or for a missing ticket.
     pub skipped: usize,
     /// The skips that were for a ticket Halo answered 404 for; the rest were
     /// ids already in Halo. They go to retry.csv but do not count as failed.
     pub skipped_missing_ticket: Vec<FailedAction>,
+    /// Actions Halo did not take.
     pub failed: Vec<FailedAction>,
     /// Rows that did not read as actions. Each counts as processed and failed.
     pub unparsed: Vec<UnparsedRow>,
@@ -600,6 +617,12 @@ impl<'a> Run<'a> {
     }
 }
 
+/// Writes retry.csv to `log_dir`: each action in `failed` in the input
+/// column layout, plus its error type, so the file can go back in as input.
+///
+/// # Errors
+///
+/// When the file cannot be written.
 pub fn write_retry_csv<'a>(
     log_dir: &str,
     failed: impl IntoIterator<Item = &'a FailedAction>,

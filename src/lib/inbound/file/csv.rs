@@ -1,3 +1,5 @@
+//! CSV files, read as a stream.
+
 use std::path::Path;
 
 use anyhow::Context;

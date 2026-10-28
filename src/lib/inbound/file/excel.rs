@@ -1,3 +1,5 @@
+//! Excel files: the first worksheet, read into memory.
+
 use std::path::Path;
 
 use anyhow::Context;
@@ -65,10 +67,12 @@ pub struct Actions {
 }
 
 impl Actions {
+    /// How many rows the sheet has under the header, blank ones included.
     pub fn total_rows(&self) -> usize {
         self.rows.len()
     }
 
+    /// The name of the worksheet being read.
     pub fn sheet_name(&self) -> &str {
         &self.sheet_name
     }

@@ -1,3 +1,5 @@
+//! HTTP clients for Halo and the timeouts they share.
+
 pub mod action;
 pub mod auth;
 

@@ -1,3 +1,5 @@
+//! OAuth 2 client credentials tokens for the Halo API.
+
 pub mod token;
 
 use std::sync::Arc;
@@ -33,6 +35,8 @@ struct TokenRequest {
     scope: String,
 }
 
+/// Fetches tokens and keeps the current one, shared by the report and action
+/// clients. `Debug` leaves out the token.
 pub struct AuthClient {
     config: Config,
     http_client: ReqwestClient,
@@ -48,6 +52,9 @@ impl std::fmt::Debug for AuthClient {
 }
 
 impl AuthClient {
+    /// An auth client for the instance in `config`. It fetches no token until
+    /// one is asked for.
+    ///
     /// # Errors
     ///
     /// When the HTTP client cannot be built.
@@ -61,6 +68,10 @@ impl AuthClient {
 
     /// The `Authorization` header value for the current token, fetching a new
     /// token first when there is none or it is about to expire.
+    ///
+    /// # Errors
+    ///
+    /// When a new token is needed and cannot be had.
     pub async fn fetch_token(&self) -> anyhow::Result<String> {
         let mut token_guard = self.current_token.lock().await;
 
@@ -79,6 +90,10 @@ impl AuthClient {
 
     /// Fetches a new token whatever the state of the current one, for a
     /// request Halo answered 401, and returns its `Authorization` header value.
+    ///
+    /// # Errors
+    ///
+    /// When the token request fails or its reply cannot be read.
     pub async fn refresh_token(&self) -> anyhow::Result<String> {
         let mut token_guard = self.current_token.lock().await;
         let new_token = self.fetch_new_token().await?;

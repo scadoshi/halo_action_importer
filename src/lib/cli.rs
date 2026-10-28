@@ -3,6 +3,7 @@
 
 use clap::Parser;
 
+/// The parsed command line.
 #[derive(Debug, Parser, PartialEq, Eq)]
 #[command(
     version,

@@ -1,3 +1,5 @@
+//! Logging, the cache, authentication and finding the input files.
+
 use std::collections::{BTreeSet, HashSet};
 use std::ffi::OsStr;
 use std::fs::OpenOptions;
@@ -34,8 +36,11 @@ struct ResourceCache {
     action_ids: Vec<String>,
 }
 
+/// What the cache holds.
 pub struct CacheData {
+    /// Every ID in `existing.json` and `imported`.
     pub action_ids: HashSet<ActionId>,
+    /// The UUIDs of the reports `existing.json` has IDs from.
     pub fetched_resources: HashSet<String>,
 }
 
@@ -78,6 +83,7 @@ impl Default for Cache {
 }
 
 impl Cache {
+    /// The cache in `dir`, created on the first write.
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         Self { dir: dir.into() }
     }
@@ -85,6 +91,10 @@ impl Cache {
     /// Reads the action IDs in `existing.json` and `imported`. A missing file
     /// reads as empty; an `existing.json` that cannot be read or parsed is an
     /// error naming the file.
+    ///
+    /// # Errors
+    ///
+    /// When a file cannot be read or `existing.json` is not valid.
     pub fn read(&self) -> anyhow::Result<CacheData> {
         let mut action_ids = HashSet::new();
         let mut fetched_resources = HashSet::new();
@@ -129,6 +139,11 @@ impl Cache {
     }
 
     /// Merges a report's action IDs into `existing.json`, under that report's UUID.
+    ///
+    /// # Errors
+    ///
+    /// When the cache cannot be locked, read or written, or `existing.json`
+    /// is not valid.
     pub fn merge_report(&self, resource_id: &str, action_ids: &[ActionId]) -> anyhow::Result<()> {
         if action_ids.is_empty() {
             return Ok(());
@@ -188,6 +203,10 @@ impl Cache {
 
     /// Appends posted action IDs to `imported`, under a lock, since several
     /// importers may share the cache.
+    ///
+    /// # Errors
+    ///
+    /// When the file cannot be locked or written.
     pub fn record_imported(&self, ids: &[String]) -> anyhow::Result<()> {
         if ids.is_empty() {
             return Ok(());
@@ -264,17 +283,31 @@ fn write_atomically(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
 /// reports into the cache first, and start a new import from an empty cache.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SetupOptions {
+    /// `--only-parse-inputs`: read and count the rows, post nothing.
     pub only_parse: bool,
+    /// `--sync-from-halo`: fetch the reports into the cache first.
     pub sync_from_halo: bool,
+    /// `--fresh`: allow an empty cache.
     pub fresh: bool,
 }
 
+/// What a run starts from.
 pub struct SetupResult {
+    /// The IDs to skip: everything in the cache, plus the reports on a sync.
     pub existing_ids: HashSet<ActionId>,
+    /// Posts the actions; `None` in parse-only mode.
     pub action_client: Option<ActionClient>,
+    /// Each input file's path and name, by name.
     pub files_to_process: Vec<(PathBuf, String)>,
 }
 
+/// Logs to the console and to `full.log` in a new timestamped directory under
+/// `log/`, and returns that directory. Parse-only runs log at info whatever
+/// `log_level` says.
+///
+/// # Errors
+///
+/// When the log directory or file cannot be created.
 pub fn setup_logging(only_parse: bool, log_level: tracing::Level) -> anyhow::Result<String> {
     std::fs::create_dir_all(LOG_DIR)
         .with_context(|| format!("Failed to create log directory: {}", LOG_DIR))?;
@@ -324,6 +357,15 @@ pub fn setup_logging(only_parse: bool, log_level: tracing::Level) -> anyhow::Res
     Ok(log_dir_path)
 }
 
+/// Reads the cache, authenticates, and on a sync fetches the reports into
+/// the cache. Returns the auth client, `None` in parse-only mode, and the IDs
+/// to skip.
+///
+/// # Errors
+///
+/// When a sync has no reports configured, the cache is empty on a run that
+/// needs it, the cache cannot be read, authentication fails, or a report
+/// cannot be fetched.
 pub async fn setup_auth_and_existing_ids(
     config: &Config,
     options: SetupOptions,
@@ -430,6 +472,13 @@ pub fn discover_files(input_path: &str) -> anyhow::Result<Vec<(PathBuf, String)>
     Ok(files_to_process)
 }
 
+/// Finds the input files, then does [`setup_auth_and_existing_ids`] and
+/// builds the action client.
+///
+/// # Errors
+///
+/// When there are no input files, or for any reason
+/// [`setup_auth_and_existing_ids`] gives.
 pub async fn setup(
     config: &Config,
     options: SetupOptions,

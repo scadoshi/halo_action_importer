@@ -1,3 +1,5 @@
+//! Fetches the IDs Halo's reports list, for `--sync-from-halo`.
+
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
@@ -35,6 +37,8 @@ pub struct ReportClient {
 }
 
 impl ReportClient {
+    /// A report client that fetches the reports in `config`.
+    ///
     /// # Errors
     ///
     /// When the HTTP client cannot be built.

@@ -1,3 +1,6 @@
+//! Imports Halo actions from CSV and Excel files, skipping the ones a
+//! local cache says Halo already has.
+
 pub mod cli;
 pub mod config;
 pub mod domain;

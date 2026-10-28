@@ -1,3 +1,5 @@
+//! An action read from a file, and the payload Halo's import endpoint takes.
+
 use chrono::{FixedOffset, NaiveDateTime, TimeZone};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -10,10 +12,12 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 pub struct ActionId(u64);
 
 impl ActionId {
+    /// The ID `id`.
     pub fn new(id: u64) -> Self {
         Self(id)
     }
 
+    /// The ID as a number.
     pub fn value(self) -> u64 {
         self.0
     }
@@ -45,6 +49,8 @@ impl std::fmt::Display for ActionId {
     }
 }
 
+/// An action as a row of an input file holds it. Each field reads from any of
+/// the header spellings the exports use.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ActionObject {
     #[serde(
@@ -56,6 +62,7 @@ pub struct ActionObject {
         alias = "REQUESTID",
         alias = "request_id"
     )]
+    /// The ticket the action belongs to.
     pub ticket_id: u32,
     #[serde(
         alias = "actionDate",
@@ -65,12 +72,17 @@ pub struct ActionObject {
         deserialize_with = "deserialize_action_date",
         skip_serializing_if = "Option::is_none"
     )]
+    /// When the action happened, in Arizona time; Halo uses the import time
+    /// when there is none.
     pub actiondate: Option<NaiveDateTime>,
     #[serde(default = "default_outcome")]
+    /// The action's outcome, `Imported Note` when the row has none.
     pub outcome: String,
     #[serde(alias = "Note", alias = "NOTE")]
+    /// The note text, sent as both plain text and HTML.
     pub note: String,
     #[serde(alias = "actionWho", alias = "ActionWho")]
+    /// Who performed the action.
     pub actionwho: String,
     #[serde(
         alias = "cfactionid",
@@ -87,8 +99,11 @@ pub struct ActionObject {
         alias = "actionId",
         alias = "action_id"
     )]
+    /// The action's unique ID, sent under the configured custom field.
     pub action_id: ActionId,
     #[serde(default = "default_is_import", rename = "_isimport")]
+    /// Whether Halo treats the action as imported; true unless the row says
+    /// otherwise.
     pub is_import: bool,
 }
 
@@ -215,6 +230,7 @@ impl Serialize for ActionPayload<'_> {
 }
 
 impl ActionObject {
+    /// An action from its parts; `outcome` defaults to `Imported Note`.
     pub fn new(
         ticket_id: u32,
         actiondate: Option<NaiveDateTime>,
@@ -235,6 +251,7 @@ impl ActionObject {
         }
     }
 
+    /// The action's unique ID.
     pub fn action_id(&self) -> ActionId {
         self.action_id
     }

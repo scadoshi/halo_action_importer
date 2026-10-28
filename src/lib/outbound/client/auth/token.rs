@@ -1,3 +1,5 @@
+//! A token and when it expires.
+
 use anyhow::Context;
 use chrono::{DateTime, Duration, Utc};
 
@@ -5,6 +7,7 @@ use chrono::{DateTime, Duration, Utc};
 /// goes out with a token that lapses on the way.
 const EXPIRY_MARGIN: Duration = Duration::seconds(30);
 
+/// An access token and when it expires. `Debug` leaves out the token.
 pub struct AuthToken {
     access_token: String,
     token_type: String,
@@ -14,6 +17,10 @@ pub struct AuthToken {
 impl AuthToken {
     /// A token that expires `expires_in` seconds from now. An expiry too far
     /// out to represent is an error.
+    ///
+    /// # Errors
+    ///
+    /// When `expires_in` is out of range.
     pub fn new(access_token: String, token_type: String, expires_in: i64) -> anyhow::Result<Self> {
         let expires_at = Duration::try_seconds(expires_in)
             .and_then(|lifetime| Utc::now().checked_add_signed(lifetime))
@@ -25,10 +32,12 @@ impl AuthToken {
         })
     }
 
+    /// Whether the token expires within the next thirty seconds.
     pub fn is_expired(&self) -> bool {
         Utc::now() + EXPIRY_MARGIN >= self.expires_at
     }
 
+    /// The `Authorization` header value, such as `Bearer abc`.
     pub fn header_value(&self) -> String {
         format!("{} {}", self.token_type, self.access_token)
     }
