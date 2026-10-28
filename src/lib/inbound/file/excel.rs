@@ -9,10 +9,16 @@ use crate::inbound::file::Reader;
 
 fn excel_serial_to_datetime(serial: f64) -> Option<NaiveDateTime> {
     let excel_epoch = NaiveDate::from_ymd_opt(1899, 12, 30)?;
-    let days = serial.floor() as i64;
-    let seconds_in_day = (serial.fract() * 86400.0).floor() as u32;
+    let mut days = serial.floor() as i64;
+    // Excel stores times as fractions of a day, so a time typed as 10:00:00
+    // can come back a hair short; round to the nearest second.
+    let mut seconds_in_day = (serial.fract() * 86400.0).round().max(0.0) as u32;
+    if seconds_in_day >= 86400 {
+        days = days.checked_add(1)?;
+        seconds_in_day = 0;
+    }
     let time = NaiveTime::from_num_seconds_from_midnight_opt(seconds_in_day, 0)?;
-    let date = excel_epoch.checked_add_signed(chrono::Duration::days(days))?;
+    let date = excel_epoch.checked_add_signed(chrono::TimeDelta::try_days(days)?)?;
     Some(NaiveDateTime::new(date, time))
 }
 
@@ -454,5 +460,28 @@ mod tests {
         let headers = ["request_id", "actionId", "actionWho", "note", "actionDate"];
         let mut iter = sheet(&headers, vec![row(Data::Float(12.0))]);
         assert_eq!(iter.next().unwrap().unwrap().ticket_id, 12);
+    }
+
+    #[test]
+    fn excel_times_round_to_the_nearest_second() {
+        let at = |d, h, min, sec| {
+            NaiveDate::from_ymd_opt(2025, 1, d)
+                .unwrap()
+                .and_hms_opt(h, min, sec)
+                .unwrap()
+        };
+        let serial = |seconds: f64| 45658.0 + seconds / 86400.0;
+        assert_eq!(
+            excel_serial_to_datetime(serial(35_999.999_9)),
+            Some(at(1, 10, 0, 0))
+        );
+        assert_eq!(
+            excel_serial_to_datetime(serial(35_999.4)),
+            Some(at(1, 9, 59, 59))
+        );
+        assert_eq!(
+            excel_serial_to_datetime(serial(86_399.999_9)),
+            Some(at(2, 0, 0, 0))
+        );
     }
 }
