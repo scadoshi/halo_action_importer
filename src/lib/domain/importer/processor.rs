@@ -46,9 +46,9 @@ struct TicketGroupedResult {
     failed_actions: Vec<FailedAction>,
 }
 
-/// Efficiently identify missing tickets and import valid actions.
-/// Strategy: Group actions by ticket_id and retry each ticket group, in ticket order.
-/// When a ticket group fails, all actions for that ticket are marked as failed.
+/// Posts a batch Halo answered 404 again, one ticket's actions at a time in
+/// ticket order, to find which tickets are missing. A group that fails fails
+/// all of its ticket's actions.
 async fn retry_by_ticket_groups(
     client: &ActionClient,
     batch: Vec<ActionObject>,
@@ -59,7 +59,6 @@ async fn retry_by_ticket_groups(
         failed_actions: Vec::new(),
     };
 
-    // Group actions by ticket_id
     let batch_len = batch.len();
     let mut ticket_groups: BTreeMap<u32, Vec<ActionObject>> = BTreeMap::new();
     for action in batch {
@@ -74,15 +73,12 @@ async fn retry_by_ticket_groups(
         ticket_groups.len()
     );
 
-    // Try each ticket group
     for (ticket_id, actions) in ticket_groups {
         match client.post_action_objects(&actions).await {
             Ok(()) => {
-                // All actions for this ticket imported successfully
                 result.imported_actions.extend(actions);
             }
             Err(PostError::TicketNotFound { .. }) => {
-                // This ticket doesn't exist, mark all its actions as failed
                 result.missing_tickets.insert(ticket_id);
                 warn!(
                     "Ticket ID: {} not found - marking {} action(s) as failed",
@@ -97,7 +93,6 @@ async fn retry_by_ticket_groups(
                 }
             }
             Err(e) => {
-                // Other error type, mark all actions in this group as failed
                 error!(
                     "Failed to import {} action(s) for ticket {}: {}",
                     actions.len(),
@@ -148,7 +143,6 @@ async fn settle_failed_batch(
     let batch_len = batch.len();
 
     if not_found && batch_len > 1 {
-        // Use ticket-grouped retry to identify missing tickets
         warn!(
             "{} of {} actions failed with 'not found' error - retrying by ticket groups",
             label, batch_len
@@ -156,7 +150,6 @@ async fn settle_failed_batch(
 
         let search_result = retry_by_ticket_groups(client, batch).await;
 
-        // Add identified missing tickets to skip set
         for ticket_id in &search_result.missing_tickets {
             missing_tickets.insert(*ticket_id);
             warn!(
@@ -187,7 +180,7 @@ async fn settle_failed_batch(
         };
     }
 
-    // Not a "not found" error, or batch size is 1
+    // Not a 404, or a batch of one.
     let mut failed = Vec::new();
     for action in batch {
         if not_found {
@@ -615,7 +608,6 @@ pub fn write_retry_csv<'a>(
     let file = File::create(&csv_path)?;
     let mut writer = Writer::from_writer(file);
 
-    // Write header
     writer.write_record([
         "ticket_id",
         "action_id",
@@ -631,7 +623,7 @@ pub fn write_retry_csv<'a>(
         written += 1;
         let action = &failed_action.action;
 
-        // Format date for CSV (keep in Arizona time as input expects)
+        // The date stays Arizona time, as the input files have it.
         let date_str = action
             .actiondate
             .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
@@ -746,7 +738,6 @@ pub fn write_summary_json(
         (*total_processed, *total_imported, *total_skipped);
     let json_path = format!("{}/summary.json", log_dir);
 
-    // Calculate performance metrics
     let rows_per_second = if runtime_secs > 0.0 {
         total_processed as f64 / runtime_secs
     } else {
@@ -761,7 +752,6 @@ pub fn write_summary_json(
         0.0
     };
 
-    // Group errors by type
     let mut error_map: BTreeMap<String, Vec<u32>> = BTreeMap::new();
     for failed_action in failed {
         error_map
@@ -793,7 +783,6 @@ pub fn write_summary_json(
         error_summary.sort_by(|a, b| a.error_type.cmp(&b.error_type));
     }
 
-    // Format runtime
     let runtime_formatted = format::format_duration(runtime_secs);
 
     let summary = SummaryJson {

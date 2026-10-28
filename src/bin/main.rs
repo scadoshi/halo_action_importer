@@ -89,7 +89,6 @@ async fn main() -> anyhow::Result<ExitCode> {
     let code = summary::exit_code(&import_summary);
     summary::log_summary(import_summary, only_parse);
 
-    // Write retry.csv, unparsed.csv and summary.json
     if totals.retry_actions().next().is_some() {
         processor::write_retry_csv(&log_dir_path, totals.retry_actions())?;
     }

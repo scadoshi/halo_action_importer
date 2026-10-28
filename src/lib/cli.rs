@@ -1,5 +1,5 @@
-//! Command line options. Every option has the long name the README documents
-//! plus the shorter spellings that were accepted before.
+//! Command line options. Each has the long name the README documents, and
+//! most have two shorter spellings.
 
 use clap::Parser;
 

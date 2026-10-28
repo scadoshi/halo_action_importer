@@ -82,8 +82,9 @@ impl Cache {
         Self { dir: dir.into() }
     }
 
-    /// Reads cached action IDs from both existing (JSON format) and imported (line-separated) files.
-    /// A resource cache that exists but cannot be read or parsed is an error naming the file.
+    /// Reads the action IDs in `existing.json` and `imported`. A missing file
+    /// reads as empty; an `existing.json` that cannot be read or parsed is an
+    /// error naming the file.
     pub fn read(&self) -> anyhow::Result<CacheData> {
         let mut action_ids = HashSet::new();
         let mut fetched_resources = HashSet::new();
@@ -127,7 +128,7 @@ impl Cache {
         })
     }
 
-    /// Merges a report's action IDs into the existing cache file (JSON format with resource tracking).
+    /// Merges a report's action IDs into `existing.json`, under that report's UUID.
     pub fn merge_report(&self, resource_id: &str, action_ids: &[ActionId]) -> anyhow::Result<()> {
         if action_ids.is_empty() {
             return Ok(());
@@ -179,14 +180,14 @@ impl Cache {
             }),
         }
 
-        // Serialize to JSON with pretty formatting
         let json = serde_json::to_string_pretty(&resources)
             .with_context(|| "Failed to serialize cache to JSON")?;
 
         write_atomically(&cache_path, json.as_bytes())
     }
 
-    /// Appends imported action IDs to the imported file, under a lock for concurrent writers.
+    /// Appends posted action IDs to `imported`, under a lock, since several
+    /// importers may share the cache.
     pub fn record_imported(&self, ids: &[String]) -> anyhow::Result<()> {
         if ids.is_empty() {
             return Ok(());
@@ -202,7 +203,6 @@ impl Cache {
             .open(&path)
             .with_context(|| format!("Failed to open imported cache file: {}", path.display()))?;
 
-        // Acquire exclusive lock to prevent concurrent writes from other processes
         file.lock_exclusive()
             .with_context(|| "Failed to acquire exclusive lock on imported cache file")?;
 
@@ -213,7 +213,6 @@ impl Cache {
             .and_then(|()| file.sync_data())
             .with_context(|| format!("Failed to write imported cache file: {}", path.display()))?;
 
-        // Lock is automatically released when file is dropped
         Ok(())
     }
 }
@@ -283,7 +282,6 @@ pub fn setup_logging(only_parse: bool, log_level: tracing::Level) -> anyhow::Res
     let timestamp_str = Utc::now().format("%Y-%m-%d_%H-%M-%S");
     let log_dir_path = format!("{}/{}", LOG_DIR, timestamp_str);
 
-    // Create the timestamped directory
     std::fs::create_dir_all(&log_dir_path).with_context(|| {
         format!(
             "Failed to create timestamped log directory: {}",
@@ -291,7 +289,6 @@ pub fn setup_logging(only_parse: bool, log_level: tracing::Level) -> anyhow::Res
         )
     })?;
 
-    // Create full.log inside the directory
     let log_file_path = format!("{}/full.log", log_dir_path);
     let log_file = OpenOptions::new()
         .create(true)
@@ -439,7 +436,7 @@ pub async fn setup(
     cache: &Cache,
     input_path: &str,
 ) -> anyhow::Result<SetupResult> {
-    // Fail fast if no files before expensive ID fetching
+    // Look for files before the slower auth and cache step.
     let files_to_process = discover_files(input_path)?;
     if files_to_process.is_empty() {
         anyhow::bail!(
