@@ -85,13 +85,14 @@ Each run writes `log/YYYY-MM-DD_HH-MM-SS/`:
 
 - `full.log`, everything that was printed, with RFC 3339 timestamps
 - `retry.csv`, the failed actions in the input column layout plus an `error_type`, when any failed. It can be dropped straight back into `input/`
+- `unparsed.csv`, the file, row number and error of each row that did not read as an action, when any did. Fix those rows in the input and run it again
 - `summary.json`, counts, timings and failures by error type
 
 Progress is printed on every successful post rather than on a timer: position, IDs, cumulative skips, average time per action and the time remaining. Consecutive skips collapse into one line.
 
 ## Failures
 
-A row that does not deserialize is logged and skipped; a file that cannot be read is logged and skipped; the run continues. After the summary, the process exits 1 when any action failed or any file could not be read, and 0 otherwise. A request gives up after five minutes. A report fetch that hits a network error, a timeout or a 504 is tried again a minute later, three tries in all. A post is sent once: Halo may have stored the actions even when the reply is a 504 or never comes, so the batch goes to `retry.csv` instead of being sent again. A 401 gets a new token and one more try; tokens are also refreshed thirty seconds before they expire.
+A row that does not deserialize is logged, written to `unparsed.csv` and counted as failed; a file that cannot be read is logged and skipped; the run continues. After the summary, the process exits 1 when any action or row failed or any file could not be read, and 0 otherwise. A request gives up after five minutes. A report fetch that hits a network error, a timeout or a 504 is tried again a minute later, three tries in all. A post is sent once: Halo may have stored the actions even when the reply is a 504 or never comes, so the batch goes to `retry.csv` instead of being sent again. A 401 gets a new token and one more try; tokens are also refreshed thirty seconds before they expire.
 
 A post Halo answers with a 404 means the ticket does not exist: it is logged once, and every later action for that ticket is skipped. When a batch gets a 404, it is regrouped by ticket and each group is posted on its own, so one missing ticket costs only its own actions. Any other rejection fails its batch, whatever the reply says.
 

@@ -43,7 +43,8 @@ pub fn setup_logging(only_parse: bool, log_level: tracing::Level) -> anyhow::Res
 ### Files Generated Per Run
 1. **full.log**: Complete log of all messages
 2. **retry.csv**: Failed actions that need retry (if any failures)
-3. **summary.json**: Machine-readable statistics
+3. **unparsed.csv**: Rows that did not read as actions, with file and row (if any)
+4. **summary.json**: Machine-readable statistics
 
 ### Dual Output Targets
 1. **File**: No ANSI color codes, permanent record

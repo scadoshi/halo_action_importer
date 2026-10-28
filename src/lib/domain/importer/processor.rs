@@ -30,6 +30,14 @@ pub struct ProcessingStats {
     /// ids already in Halo.
     pub skipped_missing_ticket: usize,
     pub failed: Vec<FailedAction>,
+    /// Rows that did not read as actions.
+    pub unparsed: Vec<RowError>,
+}
+
+/// A row that did not read as an action, and the file it is in.
+pub struct UnparsedRow {
+    pub file: String,
+    pub error: RowError,
 }
 
 struct TicketGroupedResult {
@@ -237,12 +245,21 @@ pub struct RunTotals {
     /// ids already in Halo.
     pub skipped_missing_ticket: usize,
     pub failed: Vec<FailedAction>,
+    /// Rows that did not read as actions. Each counts as processed and failed.
+    pub unparsed: Vec<UnparsedRow>,
     /// How many files were read, whatever became of their rows.
     pub files_read: usize,
     /// Each file that could not be read, with the reason.
     pub skipped_files: Vec<String>,
     /// How long each file took, in seconds.
     pub sheet_times: Vec<f64>,
+}
+
+impl RunTotals {
+    /// Actions that failed to import plus rows that did not parse.
+    pub fn total_failed(&self) -> usize {
+        self.failed.len() + self.unparsed.len()
+    }
 }
 
 /// One run over a list of files. It carries what each file leaves for the
@@ -264,6 +281,7 @@ struct Sheet {
     skipped: usize,
     skipped_missing_ticket: usize,
     failed: Vec<FailedAction>,
+    unparsed: Vec<RowError>,
     /// Tickets Halo answered 404 for; their later actions are skipped.
     missing_tickets: HashSet<u32>,
     /// Seconds per action of each post, for the ETA.
@@ -312,6 +330,7 @@ impl<'a> Run<'a> {
             skipped: 0,
             skipped_missing_ticket: 0,
             failed: Vec::new(),
+            unparsed: Vec::new(),
             files_read: 0,
             skipped_files: Vec::new(),
             sheet_times: Vec::new(),
@@ -324,6 +343,12 @@ impl<'a> Run<'a> {
                     totals.skipped += stats.skipped;
                     totals.skipped_missing_ticket += stats.skipped_missing_ticket;
                     totals.failed.extend(stats.failed);
+                    totals
+                        .unparsed
+                        .extend(stats.unparsed.into_iter().map(|error| UnparsedRow {
+                            file: file_name.clone(),
+                            error,
+                        }));
                     totals.files_read += 1;
                 }
                 Err(e) => {
@@ -390,6 +415,7 @@ impl<'a> Run<'a> {
             skipped: 0,
             skipped_missing_ticket: 0,
             failed: Vec::new(),
+            unparsed: Vec::new(),
             missing_tickets: HashSet::new(),
             row_times: Vec::new(),
             pending_skips: 0,
@@ -411,7 +437,8 @@ impl<'a> Run<'a> {
                 Err(e) => {
                     sheet.log_pending_skips();
                     error!("Failed to deserialize row in {}: {}", source, e);
-                    // Don't add to failed vec - no ActionObject to retry
+                    sheet.processed += 1;
+                    sheet.unparsed.push(e);
                     continue;
                 }
             };
@@ -468,6 +495,7 @@ impl<'a> Run<'a> {
             skipped: sheet.skipped,
             skipped_missing_ticket: sheet.skipped_missing_ticket,
             failed: sheet.failed,
+            unparsed: sheet.unparsed,
         }
     }
 
@@ -607,6 +635,31 @@ pub fn write_retry_csv(log_dir: &str, failed: &[FailedAction]) -> anyhow::Result
     Ok(())
 }
 
+/// Writes unparsed.csv to `log_dir`: the file, row number and error of each
+/// row that did not read as an action.
+///
+/// # Errors
+///
+/// When the file cannot be written.
+pub fn write_unparsed_csv(log_dir: &str, unparsed: &[UnparsedRow]) -> anyhow::Result<()> {
+    let csv_path = format!("{log_dir}/unparsed.csv");
+    let mut writer = Writer::from_path(&csv_path)?;
+    writer.write_record(["file", "row", "error"])?;
+    for row in unparsed {
+        writer.write_record([
+            row.file.as_str(),
+            row.error.row.to_string().as_str(),
+            row.error.message.as_str(),
+        ])?;
+    }
+    writer.flush()?;
+    info!("Wrote {} unparsed rows to {}", unparsed.len(), csv_path);
+    Ok(())
+}
+
+/// The error type summary.json files rows that did not parse under.
+const PARSE_ERROR: &str = "Parse error";
+
 #[derive(Serialize)]
 struct SummaryJson {
     timestamp: String,
@@ -663,6 +716,7 @@ pub fn write_summary_json(
         skipped: total_skipped,
         skipped_missing_ticket,
         failed,
+        unparsed,
         files_read,
         skipped_files,
         sheet_times: _,
@@ -695,7 +749,7 @@ pub fn write_summary_json(
             .push(failed_action.action.ticket_id);
     }
 
-    let error_summary: Vec<ErrorTypeSummary> = error_map
+    let mut error_summary: Vec<ErrorTypeSummary> = error_map
         .into_iter()
         .map(|(error_type, mut tickets)| {
             let failures = tickets.len();
@@ -709,6 +763,14 @@ pub fn write_summary_json(
         })
         .collect();
 
+    if !unparsed.is_empty() {
+        error_summary.push(ErrorTypeSummary {
+            error_type: PARSE_ERROR.to_string(),
+            failures: unparsed.len(),
+            affected_tickets: Vec::new(),
+        });
+    }
+
     // Format runtime
     let runtime_formatted = format_duration(runtime_secs);
 
@@ -719,7 +781,7 @@ pub fn write_summary_json(
         total_processed,
         total_imported,
         total_skipped,
-        total_failed: failed.len(),
+        total_failed: totals.total_failed(),
         skipped_breakdown: SkippedBreakdown {
             already_exists: total_skipped.saturating_sub(*skipped_missing_ticket),
             missing_ticket: *skipped_missing_ticket,
@@ -1044,6 +1106,7 @@ mod tests {
         failed: usize,
         exit_code: u8,
         retry_csv: Option<String>,
+        unparsed_csv: Option<String>,
         /// summary.json without its timing fields, which change run to run.
         summary: serde_json::Value,
     }
@@ -1090,7 +1153,7 @@ mod tests {
             total_processed: totals.processed,
             total_imported: totals.imported,
             total_skipped: totals.skipped,
-            total_failed: totals.failed.len(),
+            total_failed: totals.total_failed(),
             skipped_files: totals.skipped_files.clone(),
             total_runtime_secs: 1.0,
             sheet_times: totals.sheet_times.clone(),
@@ -1098,8 +1161,12 @@ mod tests {
         if !totals.failed.is_empty() {
             write_retry_csv(log_dir_str, &totals.failed).unwrap();
         }
+        if !totals.unparsed.is_empty() {
+            write_unparsed_csv(log_dir_str, &totals.unparsed).unwrap();
+        }
         write_summary_json(log_dir_str, &totals, 1.0).unwrap();
         let retry_csv = std::fs::read_to_string(log_dir.join("retry.csv")).ok();
+        let unparsed_csv = std::fs::read_to_string(log_dir.join("unparsed.csv")).ok();
         let mut summary: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(log_dir.join("summary.json")).unwrap())
                 .unwrap();
@@ -1118,9 +1185,10 @@ mod tests {
             processed: totals.processed,
             imported: totals.imported,
             skipped: totals.skipped,
-            failed: totals.failed.len(),
+            failed: totals.total_failed(),
             exit_code: code,
             retry_csv,
+            unparsed_csv,
             summary,
         }
     }
@@ -1361,14 +1429,15 @@ mod tests {
         assert_eq!(
             run.summary,
             serde_json::json!({
-                "total_processed": 8,
+                "total_processed": 9,
                 "total_imported": 2,
                 "total_skipped": 3,
-                "total_failed": 3,
+                "total_failed": 4,
                 "skipped_breakdown": { "already_exists": 1, "missing_ticket": 2 },
                 "files_processed": 1,
                 "files_skipped": 1,
                 "error_summary": [
+                    { "error_type": "Parse error", "failures": 1, "affected_tickets": [] },
                     { "error_type": "Server error", "failures": 2, "affected_tickets": [3] },
                     { "error_type": "Ticket not found", "failures": 1, "affected_tickets": [2] },
                 ],
@@ -1532,5 +1601,106 @@ mod tests {
             ),
             (&serde_json::json!(1), &serde_json::json!(1))
         );
+    }
+
+    /// A good row, then a row whose ticket is not a number, in a CSV file and
+    /// an Excel file.
+    fn files_with_a_bad_row() -> [(&'static str, Vec<u8>); 2] {
+        let csv = format!("{HEADER}1,10,w,n,\nnope,11,w,n,\n").into_bytes();
+        let excel = xlsx(&[
+            vec![
+                Cell::Text("requestId"),
+                Cell::Text("actionId"),
+                Cell::Text("actionwho"),
+                Cell::Text("note"),
+                Cell::Text("actiondate"),
+            ],
+            vec![
+                Cell::Number(1.0),
+                Cell::Number(10.0),
+                Cell::Text("w"),
+                Cell::Text("n"),
+                Cell::Empty,
+            ],
+            vec![
+                Cell::Text("nope"),
+                Cell::Number(11.0),
+                Cell::Text("w"),
+                Cell::Text("n"),
+                Cell::Empty,
+            ],
+        ]);
+        [("a.csv", csv), ("a.xlsx", excel)]
+    }
+
+    #[tokio::test]
+    async fn a_row_that_does_not_parse_counts_as_failed_and_the_run_exits_one() {
+        for only_parse in [false, true] {
+            for file in files_with_a_bad_row() {
+                let replies = if only_parse {
+                    Vec::new()
+                } else {
+                    vec![TOKEN, CREATED]
+                };
+                let server = TestServer::start(replies).await;
+
+                let run = run_files(
+                    &server,
+                    "unparsed_counts",
+                    std::slice::from_ref(&file),
+                    1,
+                    only_parse,
+                )
+                .await;
+
+                let context = format!("{} parse only {only_parse}", file.0);
+                assert_eq!(
+                    (run.processed, run.imported, run.failed, run.exit_code),
+                    (2, 1, 1, 1),
+                    "{context}"
+                );
+                assert_eq!(run.summary["total_failed"], 1, "{context}");
+                assert_eq!(
+                    run.summary["error_summary"],
+                    serde_json::json!([
+                        { "error_type": "Parse error", "failures": 1, "affected_tickets": [] },
+                    ]),
+                    "{context}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_row_that_does_not_parse_is_written_to_unparsed_csv_with_its_file_and_row() {
+        for (file, row) in files_with_a_bad_row().into_iter().zip([2, 3]) {
+            let server = TestServer::start(vec![TOKEN, CREATED]).await;
+
+            let run = run_files(
+                &server,
+                "unparsed_csv",
+                std::slice::from_ref(&file),
+                1,
+                false,
+            )
+            .await;
+
+            let written = run.unparsed_csv.unwrap_or_default();
+            let mut lines = written.lines();
+            assert_eq!(lines.next(), Some("file,row,error"), "{}", file.0);
+            let line = lines.next().unwrap_or_default();
+            assert!(
+                line.starts_with(&format!("{},{row},", file.0)),
+                "{}: {written}",
+                file.0
+            );
+            assert!(
+                line.contains("failed to deserialize"),
+                "{}: {written}",
+                file.0
+            );
+            assert_eq!(lines.next(), None, "{}", file.0);
+            assert_eq!(run.retry_csv, None, "{}", file.0);
+        }
     }
 }

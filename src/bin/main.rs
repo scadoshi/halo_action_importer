@@ -8,7 +8,7 @@ use halo_action_importer::config::Config;
 use halo_action_importer::domain::importer::format::format_number;
 use halo_action_importer::domain::importer::{
     Cache, ImportSummary, ProcessConfig, Run, SetupOptions, SetupResult, exit_code, log_summary,
-    setup, write_retry_csv, write_summary_json,
+    setup, write_retry_csv, write_summary_json, write_unparsed_csv,
 };
 use tracing::info;
 
@@ -78,7 +78,7 @@ async fn main() -> anyhow::Result<ExitCode> {
         total_processed: totals.processed,
         total_imported: totals.imported,
         total_skipped: totals.skipped,
-        total_failed: totals.failed.len(),
+        total_failed: totals.total_failed(),
         skipped_files: totals.skipped_files.clone(),
         total_runtime_secs: total_runtime,
         sheet_times: totals.sheet_times.clone(),
@@ -86,9 +86,12 @@ async fn main() -> anyhow::Result<ExitCode> {
     let code = exit_code(&summary);
     log_summary(summary, only_parse);
 
-    // Write retry.csv and summary.json
+    // Write retry.csv, unparsed.csv and summary.json
     if !totals.failed.is_empty() {
         write_retry_csv(&log_dir_path, &totals.failed)?;
+    }
+    if !totals.unparsed.is_empty() {
+        write_unparsed_csv(&log_dir_path, &totals.unparsed)?;
     }
 
     write_summary_json(&log_dir_path, &totals, total_runtime)?;
