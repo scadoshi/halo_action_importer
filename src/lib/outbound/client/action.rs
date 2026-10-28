@@ -1,8 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Context;
-use reqwest::Client as ReqwestClient;
+use reqwest::{Client as ReqwestClient, StatusCode};
 use tracing::{error, warn};
 
 use crate::config::Config;
@@ -42,17 +41,18 @@ impl ActionClient {
         })
     }
 
+    /// Posts `action_objects` in one request.
+    ///
+    /// # Errors
+    ///
+    /// A [`PostError`] saying why Halo did not take the batch.
     pub async fn post_action_objects(
         &self,
         action_objects: Vec<ActionObject>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), PostError> {
         if action_objects.is_empty() {
             return Ok(());
         }
-        let action_ids: Vec<String> = action_objects
-            .iter()
-            .map(|a| a.action_id().to_string())
-            .collect();
         let payload: Vec<_> = action_objects
             .iter()
             .map(|action| action.payload(&self.config.action_id_custom_field))
@@ -63,52 +63,113 @@ impl ActionClient {
             .auth_client
             .fetch_token()
             .await
-            .context("Failed to get valid authentication token")?;
+            .map_err(PostError::Auth)?;
         // A 401 gets one new token and one more try; a second 401 is an error.
         let mut refreshed = false;
 
         loop {
-            let request = self
+            let response = self
                 .http_client
                 .post(endpoint.clone())
                 .header("Authorization", &auth_token)
                 .header("Content-Type", "application/json; charset=utf-8")
-                .json(&payload);
-
-            let response = request.send().await.with_context(|| {
-                format!("Action object POST failed for action IDs {action_ids:?}")
-            })?;
+                .json(&payload)
+                .send()
+                .await
+                .map_err(PostError::from_send)?;
 
             let status = response.status();
 
-            if status == reqwest::StatusCode::UNAUTHORIZED && !refreshed {
+            if status == StatusCode::UNAUTHORIZED && !refreshed {
                 warn!("Received 401 Unauthorized for batch, refreshing token and retrying");
                 auth_token = self
                     .auth_client
                     .refresh_token()
                     .await
-                    .context("Failed to refresh authentication token after 401")?;
+                    .map_err(PostError::Auth)?;
                 refreshed = true;
                 continue;
             }
 
-            if !status.is_success() {
-                let error_text: String = response
-                    .text()
-                    .await
-                    .unwrap_or_else(|_| "failed to get error response".to_string());
-                error!(
-                    "Action object POST failed for batch: status {}, error: {}",
-                    status, error_text
-                );
-                anyhow::bail!(
-                    "Action object POST failed for batch: status {}, error: {}",
-                    status,
-                    error_text
-                )
+            if status.is_success() {
+                return Ok(());
             }
 
-            return Ok(());
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "failed to get error response".to_string());
+            let error = if status == StatusCode::NOT_FOUND {
+                PostError::TicketNotFound { body }
+            } else {
+                PostError::Rejected { status, body }
+            };
+            error!("Action object POST failed for batch: {error}");
+            return Err(error);
+        }
+    }
+}
+
+/// Why Halo did not take a batch of actions.
+#[derive(Debug)]
+pub enum PostError {
+    /// Halo answered 404: the ticket the actions belong to does not exist.
+    TicketNotFound { body: String },
+    /// Halo answered with any other error status.
+    Rejected { status: StatusCode, body: String },
+    /// No reply came within the request timeout. Halo may still have stored the batch.
+    Timeout(reqwest::Error),
+    /// The request could not be sent or its reply could not be read.
+    Network(reqwest::Error),
+    /// No token could be had to send the request with.
+    Auth(anyhow::Error),
+}
+
+impl PostError {
+    fn from_send(error: reqwest::Error) -> Self {
+        if error.is_timeout() {
+            Self::Timeout(error)
+        } else {
+            Self::Network(error)
+        }
+    }
+
+    /// The error type `retry.csv` and `summary.json` show for the failed actions.
+    pub fn error_type(&self) -> &'static str {
+        match self {
+            Self::TicketNotFound { .. } => "Ticket not found",
+            Self::Rejected { status, .. } => match *status {
+                StatusCode::BAD_REQUEST => "Validation error",
+                StatusCode::UNAUTHORIZED => "Authentication error",
+                StatusCode::GATEWAY_TIMEOUT => "Gateway timeout",
+                StatusCode::INTERNAL_SERVER_ERROR => "Server error",
+                _ => "Unknown error",
+            },
+            Self::Timeout(_) => "Request timeout",
+            Self::Network(_) => "Network error",
+            Self::Auth(_) => "Authentication error",
+        }
+    }
+}
+
+impl std::fmt::Display for PostError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TicketNotFound { body } => write!(f, "status 404, ticket not found: {body}"),
+            Self::Rejected { status, body } => write!(f, "status {status}, error: {body}"),
+            Self::Timeout(e) => write!(f, "no reply within the request timeout: {e}"),
+            Self::Network(e) => write!(f, "network error: {e}"),
+            Self::Auth(e) => write!(f, "authentication failed: {e:#}"),
+        }
+    }
+}
+
+impl std::error::Error for PostError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Timeout(e) | Self::Network(e) => Some(e),
+            Self::Auth(e) => Some(e.as_ref()),
+            Self::TicketNotFound { .. } | Self::Rejected { .. } => None,
         }
     }
 }
@@ -228,7 +289,7 @@ mod tests {
         .await
         .expect("the post hung");
 
-        assert!(result.is_err());
+        assert!(matches!(result, Err(PostError::Network(_))), "{result:?}");
         assert_eq!(lines(&server.requests()), [POST_TOKEN, POST_ACTIONS]);
     }
 
@@ -244,8 +305,66 @@ mod tests {
             .await
             .expect("the post hung");
 
-        assert!(result.is_err());
+        assert!(matches!(result, Err(PostError::Timeout(_))), "{result:?}");
         assert_eq!(lines(&server.requests()), [POST_TOKEN, POST_ACTIONS]);
+    }
+
+    /// Posts one action to a server that answers `status` with `body`.
+    async fn post_answered(status: u16, body: &'static str) -> Result<(), PostError> {
+        let server = TestServer::start(vec![TOKEN, Reply::Json(status, body)]).await;
+        tokio::time::timeout(
+            HUNG,
+            client(&server).post_action_objects(vec![action(1, 10)]),
+        )
+        .await
+        .expect("the post hung")
+    }
+
+    #[tokio::test]
+    async fn a_post_answered_404_is_ticket_not_found_whatever_the_body() {
+        let result = post_answered(404, "{}").await;
+        assert!(
+            matches!(result, Err(PostError::TicketNotFound { .. })),
+            "{result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_post_answered_400_is_a_rejection_even_when_the_body_says_not_found() {
+        let result = post_answered(400, r#"{"error":"user not found"}"#).await;
+        let Err(PostError::Rejected { status, body }) = result else {
+            panic!("{result:?}");
+        };
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body.contains("user not found"), "{body}");
+    }
+
+    #[test]
+    fn error_types_come_from_the_status_or_the_kind_of_failure() {
+        let rejected = |status| PostError::Rejected {
+            status,
+            body: String::new(),
+        };
+        let cases = [
+            (
+                PostError::TicketNotFound {
+                    body: String::new(),
+                },
+                "Ticket not found",
+            ),
+            (rejected(StatusCode::BAD_REQUEST), "Validation error"),
+            (rejected(StatusCode::UNAUTHORIZED), "Authentication error"),
+            (rejected(StatusCode::GATEWAY_TIMEOUT), "Gateway timeout"),
+            (rejected(StatusCode::INTERNAL_SERVER_ERROR), "Server error"),
+            (rejected(StatusCode::FORBIDDEN), "Unknown error"),
+            (
+                PostError::Auth(anyhow::anyhow!("no token")),
+                "Authentication error",
+            ),
+        ];
+        for (error, want) in cases {
+            assert_eq!(error.error_type(), want, "{error}");
+        }
     }
 
     #[tokio::test]

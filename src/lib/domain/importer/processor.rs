@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::path::Path;
 use std::time::Instant;
@@ -14,7 +14,7 @@ use crate::domain::models::action_object::{ActionId, ActionObject};
 use crate::inbound::file::Reader;
 use crate::inbound::file::csv::Csv;
 use crate::inbound::file::excel::Excel;
-use crate::outbound::client::action::ActionClient;
+use crate::outbound::client::action::{ActionClient, PostError};
 
 pub struct FailedAction {
     pub action: ActionObject,
@@ -41,32 +41,6 @@ struct ProcessConfig<'a> {
     cache: &'a Cache,
 }
 
-fn is_not_found_error(error_str: &str) -> bool {
-    error_str.contains("not found")
-        || error_str.contains("Not Found")
-        || error_str.contains("404")
-        || error_str.contains("does not exist")
-        || error_str.contains("doesn't exist")
-}
-
-fn extract_error_type(error_str: &str) -> String {
-    if is_not_found_error(error_str) {
-        "Ticket not found".to_string()
-    } else if error_str.contains("status 400") {
-        "Validation error".to_string()
-    } else if error_str.contains("status 401") {
-        "Authentication error".to_string()
-    } else if error_str.contains("status 504") {
-        "Gateway timeout".to_string()
-    } else if error_str.contains("status 500") {
-        "Server error".to_string()
-    } else if error_str.contains("Action client not available") {
-        "Client unavailable".to_string()
-    } else {
-        "Unknown error".to_string()
-    }
-}
-
 struct TicketGroupedResult {
     missing_tickets: HashSet<u32>,
     imported_actions: Vec<ActionObject>,
@@ -74,7 +48,7 @@ struct TicketGroupedResult {
 }
 
 /// Efficiently identify missing tickets and import valid actions.
-/// Strategy: Group actions by ticket_id and retry each ticket group.
+/// Strategy: Group actions by ticket_id and retry each ticket group, in ticket order.
 /// When a ticket group fails, all actions for that ticket are marked as failed.
 async fn retry_by_ticket_groups(
     client: &ActionClient,
@@ -87,7 +61,7 @@ async fn retry_by_ticket_groups(
     };
 
     // Group actions by ticket_id
-    let mut ticket_groups: HashMap<u32, Vec<ActionObject>> = HashMap::new();
+    let mut ticket_groups: BTreeMap<u32, Vec<ActionObject>> = BTreeMap::new();
     for action in batch {
         ticket_groups
             .entry(action.ticket_id)
@@ -103,41 +77,38 @@ async fn retry_by_ticket_groups(
     // Try each ticket group
     for (ticket_id, actions) in ticket_groups {
         match client.post_action_objects(actions.clone()).await {
-            Ok(_) => {
+            Ok(()) => {
                 // All actions for this ticket imported successfully
                 result.imported_actions.extend(actions);
             }
+            Err(PostError::TicketNotFound { .. }) => {
+                // This ticket doesn't exist, mark all its actions as failed
+                result.missing_tickets.insert(ticket_id);
+                warn!(
+                    "Ticket ID: {} not found - marking {} action(s) as failed",
+                    ticket_id,
+                    actions.len()
+                );
+                for action in actions {
+                    result.failed_actions.push(FailedAction {
+                        action,
+                        error_type: "Ticket not found".to_string(),
+                    });
+                }
+            }
             Err(e) => {
-                let err_str = e.to_string();
-                if is_not_found_error(&err_str) {
-                    // This ticket doesn't exist, mark all its actions as failed
-                    result.missing_tickets.insert(ticket_id);
-                    warn!(
-                        "Ticket ID: {} not found - marking {} action(s) as failed",
-                        ticket_id,
-                        actions.len()
-                    );
-                    for action in actions {
-                        result.failed_actions.push(FailedAction {
-                            action,
-                            error_type: "Ticket not found".to_string(),
-                        });
-                    }
-                } else {
-                    // Other error type, mark all actions in this group as failed
-                    let error_type = extract_error_type(&err_str);
-                    error!(
-                        "Failed to import {} action(s) for ticket {}: {}",
-                        actions.len(),
-                        ticket_id,
-                        err_str
-                    );
-                    for action in actions {
-                        result.failed_actions.push(FailedAction {
-                            action,
-                            error_type: error_type.clone(),
-                        });
-                    }
+                // Other error type, mark all actions in this group as failed
+                error!(
+                    "Failed to import {} action(s) for ticket {}: {}",
+                    actions.len(),
+                    ticket_id,
+                    e
+                );
+                for action in actions {
+                    result.failed_actions.push(FailedAction {
+                        action,
+                        error_type: e.error_type().to_string(),
+                    });
                 }
             }
         }
@@ -151,6 +122,97 @@ async fn retry_by_ticket_groups(
     );
 
     result
+}
+
+/// What a batch Halo did not take comes to.
+struct FailedBatch {
+    /// Actions a ticket by ticket retry got in after all.
+    imported: Vec<ActionObject>,
+    failed: Vec<FailedAction>,
+    /// Whether the batch was posted again ticket by ticket.
+    regrouped: bool,
+}
+
+/// Settles a batch whose post failed with `error`. A 404 marks its tickets
+/// missing; a 404 on a batch of more than one action posts it again ticket by
+/// ticket first, so one missing ticket fails only its own actions. Every other
+/// error fails the whole batch. `label` names the batch in the log.
+async fn settle_failed_batch(
+    client: &ActionClient,
+    batch: &[ActionObject],
+    error: PostError,
+    missing_tickets: &mut HashSet<u32>,
+    label: &str,
+) -> FailedBatch {
+    let not_found = matches!(error, PostError::TicketNotFound { .. });
+
+    if not_found && batch.len() > 1 {
+        // Use ticket-grouped retry to identify missing tickets
+        warn!(
+            "{} of {} actions failed with 'not found' error - retrying by ticket groups",
+            label,
+            batch.len()
+        );
+
+        let search_result = retry_by_ticket_groups(client, batch).await;
+
+        // Add identified missing tickets to skip set
+        for ticket_id in &search_result.missing_tickets {
+            missing_tickets.insert(*ticket_id);
+            warn!(
+                "Ticket ID: {} not found - will skip future actions for this ticket",
+                ticket_id
+            );
+        }
+
+        for failed_action in &search_result.failed_actions {
+            error!(
+                "Failed to import action ID: {} (ticket ID: {})",
+                failed_action.action.action_id(),
+                failed_action.action.ticket_id
+            );
+        }
+
+        info!(
+            "Ticket group retry complete: recovered {}/{} actions, identified {} missing ticket(s)",
+            search_result.imported_actions.len(),
+            batch.len(),
+            search_result.missing_tickets.len()
+        );
+
+        return FailedBatch {
+            imported: search_result.imported_actions,
+            failed: search_result.failed_actions,
+            regrouped: true,
+        };
+    }
+
+    // Not a "not found" error, or batch size is 1
+    let mut failed = Vec::new();
+    for action in batch {
+        if not_found {
+            missing_tickets.insert(action.ticket_id);
+            warn!(
+                "Ticket ID: {} not found - will skip future actions for this ticket",
+                action.ticket_id
+            );
+        }
+        error!(
+            "Failed to import action ID: {} (ticket ID: {}): {}",
+            action.action_id(),
+            action.ticket_id,
+            error
+        );
+        failed.push(FailedAction {
+            action: action.clone(),
+            error_type: error.error_type().to_string(),
+        });
+    }
+    FailedBatch {
+        imported: Vec::new(),
+        failed,
+        regrouped: false,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -320,94 +382,37 @@ pub async fn process_csv_file(
                             batch_start = Instant::now();
                         }
                         Err(e) => {
-                            let error_str = e.to_string();
-
-                            if is_not_found_error(&error_str) && batch.len() > 1 {
-                                // Use ticket-grouped retry to identify missing tickets
-                                warn!(
-                                    "Batch of {} actions failed with 'not found' error - retrying by ticket groups",
-                                    batch.len()
-                                );
-
-                                let search_result = retry_by_ticket_groups(client, &batch).await;
-
-                                // Add identified missing tickets to skip set
-                                for ticket_id in &search_result.missing_tickets {
-                                    config.missing_tickets.insert(*ticket_id);
-                                    warn!(
-                                        "Ticket ID: {} not found - will skip future actions for this ticket",
-                                        ticket_id
-                                    );
-                                }
-
-                                // Update imported count and cache
-                                let recovered = search_result.imported_actions.len();
-                                imported += recovered;
+                            let outcome = settle_failed_batch(
+                                client,
+                                &batch,
+                                e,
+                                config.missing_tickets,
+                                "Batch",
+                            )
+                            .await;
+                            if outcome.regrouped {
                                 batch_number += 1;
-
-                                if !search_result.imported_actions.is_empty() {
-                                    let imported_ids: Vec<String> = search_result
-                                        .imported_actions
-                                        .iter()
-                                        .map(|a| a.action_id().to_string())
-                                        .collect();
-                                    if let Err(e) = config.cache.record_imported(&imported_ids) {
-                                        warn!("Failed to update cache: {}", e);
-                                    }
-
-                                    // Track timing for recovered actions
-                                    let avg_action_time =
-                                        batch_start.elapsed().as_secs_f64() / batch.len() as f64;
-                                    for _ in 0..recovered {
-                                        row_times.push(avg_action_time);
-                                    }
+                            }
+                            let recovered = outcome.imported.len();
+                            imported += recovered;
+                            if recovered > 0 {
+                                let imported_ids: Vec<String> = outcome
+                                    .imported
+                                    .iter()
+                                    .map(|a| a.action_id().to_string())
+                                    .collect();
+                                if let Err(e) = config.cache.record_imported(&imported_ids) {
+                                    warn!("Failed to update cache: {}", e);
                                 }
 
-                                // Add failed actions to the failed list
-                                for failed_action in search_result.failed_actions {
-                                    error!(
-                                        "Failed to import action ID: {} (ticket ID: {})",
-                                        failed_action.action.action_id(),
-                                        failed_action.action.ticket_id
-                                    );
-                                    failed.push(failed_action);
-                                }
-
-                                info!(
-                                    "Ticket group retry complete: recovered {}/{} actions, identified {} missing ticket(s)",
-                                    recovered,
-                                    batch.len(),
-                                    search_result.missing_tickets.len()
-                                );
-                            } else {
-                                // Not a "not found" error, or batch size is 1
-                                // Mark all as failed (existing behavior for other errors)
-                                let error_type = extract_error_type(&error_str);
-
-                                for action in &batch {
-                                    let action_id = action.action_id().to_string();
-                                    let ticket_id = action.ticket_id;
-
-                                    if is_not_found_error(&error_str) {
-                                        config.missing_tickets.insert(ticket_id);
-                                        warn!(
-                                            "Ticket ID: {} not found - will skip future actions for this ticket",
-                                            ticket_id
-                                        );
-                                    }
-
-                                    let error_msg = format!(
-                                        "Failed to import action ID: {} (ticket ID: {}): {}",
-                                        action_id, ticket_id, e
-                                    );
-                                    error!("{}", error_msg);
-
-                                    failed.push(FailedAction {
-                                        action: action.clone(),
-                                        error_type: error_type.clone(),
-                                    });
+                                // Track timing for recovered actions
+                                let avg_action_time =
+                                    batch_start.elapsed().as_secs_f64() / batch.len() as f64;
+                                for _ in 0..recovered {
+                                    row_times.push(avg_action_time);
                                 }
                             }
+                            failed.extend(outcome.failed);
 
                             batch.clear();
                             batch_start = Instant::now();
@@ -509,98 +514,34 @@ pub async fn process_csv_file(
                     }
                 }
                 Err(e) => {
-                    let error_str = e.to_string();
-                    let is_not_found = error_str.contains("not found")
-                        || error_str.contains("Not Found")
-                        || error_str.contains("404")
-                        || error_str.contains("does not exist")
-                        || error_str.contains("doesn't exist");
-
-                    if is_not_found && batch.len() > 1 {
-                        // Use ticket-grouped retry to identify missing tickets
-                        warn!(
-                            "Final batch of {} actions failed with 'not found' error - retrying by ticket groups",
-                            batch.len()
-                        );
-
-                        let search_result = retry_by_ticket_groups(client, &batch).await;
-
-                        // Add identified missing tickets to skip set
-                        for ticket_id in &search_result.missing_tickets {
-                            config.missing_tickets.insert(*ticket_id);
-                            warn!(
-                                "Ticket ID: {} not found - will skip future actions for this ticket",
-                                ticket_id
-                            );
+                    let outcome = settle_failed_batch(
+                        client,
+                        &batch,
+                        e,
+                        config.missing_tickets,
+                        "Final batch",
+                    )
+                    .await;
+                    let recovered = outcome.imported.len();
+                    imported += recovered;
+                    if recovered > 0 {
+                        let imported_ids: Vec<String> = outcome
+                            .imported
+                            .iter()
+                            .map(|a| a.action_id().to_string())
+                            .collect();
+                        if let Err(e) = config.cache.record_imported(&imported_ids) {
+                            warn!("Failed to update cache: {}", e);
                         }
 
-                        // Update imported count and cache
-                        let recovered = search_result.imported_actions.len();
-                        imported += recovered;
-
-                        if !search_result.imported_actions.is_empty() {
-                            let imported_ids: Vec<String> = search_result
-                                .imported_actions
-                                .iter()
-                                .map(|a| a.action_id().to_string())
-                                .collect();
-                            if let Err(e) = config.cache.record_imported(&imported_ids) {
-                                warn!("Failed to update cache: {}", e);
-                            }
-
-                            // Track timing for recovered actions
-                            let avg_action_time =
-                                batch_start.elapsed().as_secs_f64() / batch.len() as f64;
-                            for _ in 0..recovered {
-                                row_times.push(avg_action_time);
-                            }
-                        }
-
-                        // Add failed actions to the failed list
-                        for failed_action in search_result.failed_actions {
-                            error!(
-                                "Failed to import action ID: {} (ticket ID: {})",
-                                failed_action.action.action_id(),
-                                failed_action.action.ticket_id
-                            );
-                            failed.push(failed_action);
-                        }
-
-                        info!(
-                            "Ticket group retry complete: recovered {}/{} actions, identified {} missing ticket(s)",
-                            recovered,
-                            batch.len(),
-                            search_result.missing_tickets.len()
-                        );
-                    } else {
-                        // Not a "not found" error, or batch size is 1
-                        // Mark all as failed (existing behavior for other errors)
-                        let error_type = extract_error_type(&error_str);
-
-                        for action in &batch {
-                            let action_id = action.action_id().to_string();
-                            let ticket_id = action.ticket_id;
-
-                            if is_not_found {
-                                config.missing_tickets.insert(ticket_id);
-                                warn!(
-                                    "Ticket ID: {} not found - will skip future actions for this ticket",
-                                    ticket_id
-                                );
-                            }
-
-                            let error_msg = format!(
-                                "Failed to import action ID: {} (ticket ID: {}): {}",
-                                action_id, ticket_id, e
-                            );
-                            error!("{}", error_msg);
-
-                            failed.push(FailedAction {
-                                action: action.clone(),
-                                error_type: error_type.clone(),
-                            });
+                        // Track timing for recovered actions
+                        let avg_action_time =
+                            batch_start.elapsed().as_secs_f64() / batch.len() as f64;
+                        for _ in 0..recovered {
+                            row_times.push(avg_action_time);
                         }
                     }
+                    failed.extend(outcome.failed);
                 }
             }
         } else {
@@ -810,94 +751,37 @@ pub async fn process_excel_file(
                             batch_start = Instant::now();
                         }
                         Err(e) => {
-                            let error_str = e.to_string();
-
-                            if is_not_found_error(&error_str) && batch.len() > 1 {
-                                // Use ticket-grouped retry to identify missing tickets
-                                warn!(
-                                    "Batch of {} actions failed with 'not found' error - retrying by ticket groups",
-                                    batch.len()
-                                );
-
-                                let search_result = retry_by_ticket_groups(client, &batch).await;
-
-                                // Add identified missing tickets to skip set
-                                for ticket_id in &search_result.missing_tickets {
-                                    config.missing_tickets.insert(*ticket_id);
-                                    warn!(
-                                        "Ticket ID: {} not found - will skip future actions for this ticket",
-                                        ticket_id
-                                    );
-                                }
-
-                                // Update imported count and cache
-                                let recovered = search_result.imported_actions.len();
-                                imported += recovered;
+                            let outcome = settle_failed_batch(
+                                client,
+                                &batch,
+                                e,
+                                config.missing_tickets,
+                                "Batch",
+                            )
+                            .await;
+                            if outcome.regrouped {
                                 batch_number += 1;
-
-                                if !search_result.imported_actions.is_empty() {
-                                    let imported_ids: Vec<String> = search_result
-                                        .imported_actions
-                                        .iter()
-                                        .map(|a| a.action_id().to_string())
-                                        .collect();
-                                    if let Err(e) = config.cache.record_imported(&imported_ids) {
-                                        warn!("Failed to update cache: {}", e);
-                                    }
-
-                                    // Track timing for recovered actions
-                                    let avg_action_time =
-                                        batch_start.elapsed().as_secs_f64() / batch.len() as f64;
-                                    for _ in 0..recovered {
-                                        row_times.push(avg_action_time);
-                                    }
+                            }
+                            let recovered = outcome.imported.len();
+                            imported += recovered;
+                            if recovered > 0 {
+                                let imported_ids: Vec<String> = outcome
+                                    .imported
+                                    .iter()
+                                    .map(|a| a.action_id().to_string())
+                                    .collect();
+                                if let Err(e) = config.cache.record_imported(&imported_ids) {
+                                    warn!("Failed to update cache: {}", e);
                                 }
 
-                                // Add failed actions to the failed list
-                                for failed_action in search_result.failed_actions {
-                                    error!(
-                                        "Failed to import action ID: {} (ticket ID: {})",
-                                        failed_action.action.action_id(),
-                                        failed_action.action.ticket_id
-                                    );
-                                    failed.push(failed_action);
-                                }
-
-                                info!(
-                                    "Ticket group retry complete: recovered {}/{} actions, identified {} missing ticket(s)",
-                                    recovered,
-                                    batch.len(),
-                                    search_result.missing_tickets.len()
-                                );
-                            } else {
-                                // Not a "not found" error, or batch size is 1
-                                // Mark all as failed (existing behavior for other errors)
-                                let error_type = extract_error_type(&error_str);
-
-                                for action in &batch {
-                                    let action_id = action.action_id().to_string();
-                                    let ticket_id = action.ticket_id;
-
-                                    if is_not_found_error(&error_str) {
-                                        config.missing_tickets.insert(ticket_id);
-                                        warn!(
-                                            "Ticket ID: {} not found - will skip future actions for this ticket",
-                                            ticket_id
-                                        );
-                                    }
-
-                                    let error_msg = format!(
-                                        "Failed to import action ID: {} (ticket ID: {}): {}",
-                                        action_id, ticket_id, e
-                                    );
-                                    error!("{}", error_msg);
-
-                                    failed.push(FailedAction {
-                                        action: action.clone(),
-                                        error_type: error_type.clone(),
-                                    });
+                                // Track timing for recovered actions
+                                let avg_action_time =
+                                    batch_start.elapsed().as_secs_f64() / batch.len() as f64;
+                                for _ in 0..recovered {
+                                    row_times.push(avg_action_time);
                                 }
                             }
+                            failed.extend(outcome.failed);
 
                             batch.clear();
                             batch_start = Instant::now();
@@ -998,98 +882,34 @@ pub async fn process_excel_file(
                     }
                 }
                 Err(e) => {
-                    let error_str = e.to_string();
-                    let is_not_found = error_str.contains("not found")
-                        || error_str.contains("Not Found")
-                        || error_str.contains("404")
-                        || error_str.contains("does not exist")
-                        || error_str.contains("doesn't exist");
-
-                    if is_not_found && batch.len() > 1 {
-                        // Use ticket-grouped retry to identify missing tickets
-                        warn!(
-                            "Final batch of {} actions failed with 'not found' error - retrying by ticket groups",
-                            batch.len()
-                        );
-
-                        let search_result = retry_by_ticket_groups(client, &batch).await;
-
-                        // Add identified missing tickets to skip set
-                        for ticket_id in &search_result.missing_tickets {
-                            config.missing_tickets.insert(*ticket_id);
-                            warn!(
-                                "Ticket ID: {} not found - will skip future actions for this ticket",
-                                ticket_id
-                            );
+                    let outcome = settle_failed_batch(
+                        client,
+                        &batch,
+                        e,
+                        config.missing_tickets,
+                        "Final batch",
+                    )
+                    .await;
+                    let recovered = outcome.imported.len();
+                    imported += recovered;
+                    if recovered > 0 {
+                        let imported_ids: Vec<String> = outcome
+                            .imported
+                            .iter()
+                            .map(|a| a.action_id().to_string())
+                            .collect();
+                        if let Err(e) = config.cache.record_imported(&imported_ids) {
+                            warn!("Failed to update cache: {}", e);
                         }
 
-                        // Update imported count and cache
-                        let recovered = search_result.imported_actions.len();
-                        imported += recovered;
-
-                        if !search_result.imported_actions.is_empty() {
-                            let imported_ids: Vec<String> = search_result
-                                .imported_actions
-                                .iter()
-                                .map(|a| a.action_id().to_string())
-                                .collect();
-                            if let Err(e) = config.cache.record_imported(&imported_ids) {
-                                warn!("Failed to update cache: {}", e);
-                            }
-
-                            // Track timing for recovered actions
-                            let avg_action_time =
-                                batch_start.elapsed().as_secs_f64() / batch.len() as f64;
-                            for _ in 0..recovered {
-                                row_times.push(avg_action_time);
-                            }
-                        }
-
-                        // Add failed actions to the failed list
-                        for failed_action in search_result.failed_actions {
-                            error!(
-                                "Failed to import action ID: {} (ticket ID: {})",
-                                failed_action.action.action_id(),
-                                failed_action.action.ticket_id
-                            );
-                            failed.push(failed_action);
-                        }
-
-                        info!(
-                            "Ticket group retry complete: recovered {}/{} actions, identified {} missing ticket(s)",
-                            recovered,
-                            batch.len(),
-                            search_result.missing_tickets.len()
-                        );
-                    } else {
-                        // Not a "not found" error, or batch size is 1
-                        // Mark all as failed (existing behavior for other errors)
-                        let error_type = extract_error_type(&error_str);
-
-                        for action in &batch {
-                            let action_id = action.action_id().to_string();
-                            let ticket_id = action.ticket_id;
-
-                            if is_not_found {
-                                config.missing_tickets.insert(ticket_id);
-                                warn!(
-                                    "Ticket ID: {} not found - will skip future actions for this ticket",
-                                    ticket_id
-                                );
-                            }
-
-                            let error_msg = format!(
-                                "Failed to import action ID: {} (ticket ID: {}): {}",
-                                action_id, ticket_id, e
-                            );
-                            error!("{}", error_msg);
-
-                            failed.push(FailedAction {
-                                action: action.clone(),
-                                error_type: error_type.clone(),
-                            });
+                        // Track timing for recovered actions
+                        let avg_action_time =
+                            batch_start.elapsed().as_secs_f64() / batch.len() as f64;
+                        for _ in 0..recovered {
+                            row_times.push(avg_action_time);
                         }
                     }
+                    failed.extend(outcome.failed);
                 }
             }
         } else {
@@ -1307,27 +1127,187 @@ pub fn write_summary_json(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::Arc;
+    use std::time::Duration;
 
-    #[test]
-    fn errors_are_classified_by_what_the_message_says() {
+    use super::*;
+    use crate::outbound::client::auth::AuthClient;
+    use crate::test_server::{Reply, TOKEN, TestServer, config, lines, scratch_dir};
+
+    /// Imports each `(name, csv)` file in turn, batch by batch, against
+    /// `server`, with a scratch cache, and returns each file's stats.
+    async fn import(
+        server: &TestServer,
+        name: &str,
+        files: &[(&str, &str)],
+        batch_size: usize,
+    ) -> Vec<ProcessingStats> {
+        let dir = scratch_dir(name);
+        let cache = Cache::new(dir.join("cache"));
+        let config = config(server.base_url());
+        let auth_client = Arc::new(AuthClient::new(config.clone()).unwrap());
+        let client = ActionClient::new(config, auth_client).unwrap();
+        let existing_ids = HashSet::new();
+        let mut sheet_times = Vec::new();
+        let mut stats = Vec::new();
+        for (number, (file_name, csv)) in files.iter().enumerate() {
+            let path = dir.join(file_name);
+            std::fs::write(&path, csv).unwrap();
+            let file_stats = tokio::time::timeout(
+                HUNG,
+                process_csv_file(
+                    &path,
+                    &existing_ids,
+                    Some(&client),
+                    &mut sheet_times,
+                    file_name,
+                    number + 1,
+                    files.len(),
+                    false,
+                    batch_size,
+                    &cache,
+                ),
+            )
+            .await
+            .expect("the import hung")
+            .unwrap();
+            stats.push(file_stats);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+        stats
+    }
+
+    const HEADER: &str = "ticket_id,actionId,actionwho,note,actiondate\n";
+
+    /// How long a test lets an import run before calling it hung.
+    const HUNG: Duration = Duration::from_secs(5);
+
+    const POST_TOKEN: &str = "POST /auth/token HTTP/1.1";
+    const POST_ACTIONS: &str = "POST /api/actions HTTP/1.1";
+    const CREATED: Reply = Reply::Json(201, "[]");
+
+    fn error_types(stats: &ProcessingStats) -> Vec<(u64, &str)> {
+        stats
+            .failed
+            .iter()
+            .map(|f| (f.action.action_id().value(), f.error_type.as_str()))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_400_whose_body_says_not_found_does_not_mark_the_ticket_missing() {
+        let server = TestServer::start(vec![
+            TOKEN,
+            Reply::Json(400, r#"{"error":"user not found"}"#),
+            CREATED,
+        ])
+        .await;
+        let csv = format!("{HEADER}1,10,w,n,\n1,11,w,n,\n");
+
+        let stats = import(&server, "proc_400_not_found", &[("a.csv", &csv)], 1).await;
+
         assert_eq!(
-            extract_error_type("ticket 12 not found"),
-            "Ticket not found"
+            lines(&server.requests()),
+            [POST_TOKEN, POST_ACTIONS, POST_ACTIONS]
         );
-        assert_eq!(extract_error_type("HTTP 404"), "Ticket not found");
+        assert_eq!(error_types(&stats[0]), [(10, "Validation error")]);
+        assert_eq!((stats[0].imported, stats[0].skipped), (1, 0));
+    }
+
+    #[tokio::test]
+    async fn a_404_marks_the_ticket_missing_and_skips_its_later_actions() {
+        let server = TestServer::start(vec![TOKEN, Reply::Json(404, "{}"), CREATED]).await;
+        let csv = format!("{HEADER}1,10,w,n,\n1,11,w,n,\n2,20,w,n,\n");
+
+        let stats = import(&server, "proc_404", &[("a.csv", &csv)], 1).await;
+
+        let requests = server.requests();
+        assert_eq!(lines(&requests), [POST_TOKEN, POST_ACTIONS, POST_ACTIONS]);
+        assert!(
+            requests[2].body.contains(r#""cfactionid":20"#),
+            "{}",
+            requests[2].body
+        );
+        assert_eq!(error_types(&stats[0]), [(10, "Ticket not found")]);
+        assert_eq!((stats[0].imported, stats[0].skipped), (1, 1));
+    }
+
+    #[tokio::test]
+    async fn a_batch_answered_404_is_posted_again_ticket_by_ticket() {
+        let server = TestServer::start(vec![
+            TOKEN,
+            Reply::Json(404, "{}"),
+            Reply::Json(404, "{}"),
+            CREATED,
+        ])
+        .await;
+        let csv = format!("{HEADER}1,10,w,n,\n2,20,w,n,\n");
+
+        let stats = import(&server, "proc_404_batch", &[("a.csv", &csv)], 2).await;
+
+        let requests = server.requests();
         assert_eq!(
-            extract_error_type("status 400: bad note"),
-            "Validation error"
+            lines(&requests),
+            [POST_TOKEN, POST_ACTIONS, POST_ACTIONS, POST_ACTIONS]
         );
-        assert_eq!(extract_error_type("status 401"), "Authentication error");
-        assert_eq!(extract_error_type("status 504"), "Gateway timeout");
-        assert_eq!(extract_error_type("status 500"), "Server error");
+        assert!(
+            requests[2].body.contains(r#""cfactionid":10"#),
+            "{}",
+            requests[2].body
+        );
+        assert!(
+            requests[3].body.contains(r#""cfactionid":20"#),
+            "{}",
+            requests[3].body
+        );
+        assert_eq!(error_types(&stats[0]), [(10, "Ticket not found")]);
+        assert_eq!(stats[0].imported, 1);
+    }
+
+    #[tokio::test]
+    async fn a_post_answered_504_fails_its_batch_and_the_next_batch_still_goes() {
+        let server = TestServer::start(vec![TOKEN, Reply::Json(504, "{}"), CREATED]).await;
+        let csv = format!("{HEADER}1,10,w,n,\n1,11,w,n,\n");
+
+        let stats = import(&server, "proc_504", &[("a.csv", &csv)], 1).await;
+
         assert_eq!(
-            extract_error_type("Action client not available"),
-            "Client unavailable"
+            lines(&server.requests()),
+            [POST_TOKEN, POST_ACTIONS, POST_ACTIONS]
         );
-        assert_eq!(extract_error_type("something else"), "Unknown error");
+        assert_eq!(error_types(&stats[0]), [(10, "Gateway timeout")]);
+        assert_eq!(stats[0].imported, 1);
+    }
+
+    #[tokio::test]
+    async fn a_post_hit_by_a_network_error_fails_its_batch_as_a_network_error() {
+        let server = TestServer::start(vec![TOKEN, Reply::Hangup, CREATED]).await;
+        let csv = format!("{HEADER}1,10,w,n,\n1,11,w,n,\n");
+
+        let stats = import(&server, "proc_hangup", &[("a.csv", &csv)], 1).await;
+
+        assert_eq!(
+            lines(&server.requests()),
+            [POST_TOKEN, POST_ACTIONS, POST_ACTIONS]
+        );
+        assert_eq!(error_types(&stats[0]), [(10, "Network error")]);
+        assert_eq!(stats[0].imported, 1);
+    }
+
+    #[tokio::test]
+    async fn a_post_answered_401_twice_fails_its_batch_as_an_authentication_error() {
+        let server = TestServer::start(vec![
+            TOKEN,
+            Reply::Json(401, "{}"),
+            TOKEN,
+            Reply::Json(401, "{}"),
+        ])
+        .await;
+        let csv = format!("{HEADER}1,10,w,n,\n");
+
+        let stats = import(&server, "proc_401_twice", &[("a.csv", &csv)], 1).await;
+
+        assert_eq!(error_types(&stats[0]), [(10, "Authentication error")]);
     }
 
     #[test]
