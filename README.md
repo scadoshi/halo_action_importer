@@ -61,7 +61,7 @@ Columns, by header name:
 | Column | Also | Holds |
 |---|---|---|
 | `CFactionId` | `actionId` | The action's unique ID |
-| `requestId` | `ticket_id` | The ticket the action belongs to |
+| `requestId` | `request_id`, `ticket_id` | The ticket the action belongs to |
 | `actionWho` | | Who performed it |
 | `note` | | The note text |
 | `actionDate` | | ISO 8601, or an Excel serial date; read as Arizona time (UTC-7) and sent as UTC |

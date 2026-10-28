@@ -448,4 +448,11 @@ mod tests {
         assert_eq!(iter.next().unwrap().unwrap().ticket_id, 7);
         assert!(iter.next().is_none());
     }
+
+    #[test]
+    fn a_request_id_header_is_read_as_the_ticket() {
+        let headers = ["request_id", "actionId", "actionWho", "note", "actionDate"];
+        let mut iter = sheet(&headers, vec![row(Data::Float(12.0))]);
+        assert_eq!(iter.next().unwrap().unwrap().ticket_id, 12);
+    }
 }

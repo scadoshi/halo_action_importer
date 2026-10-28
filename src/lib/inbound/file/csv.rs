@@ -178,4 +178,16 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         assert_eq!(actions[0].action_id().to_string(), "42");
     }
+
+    #[test]
+    fn a_request_id_header_is_read_as_the_ticket() {
+        let path = write(
+            "request_id.csv",
+            "request_id,actionId,actionwho,note,actiondate\n\
+             12,1,w,n,\n",
+        );
+        let actions = Reader::try_csv_to_action_objects(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(actions[0].ticket_id, 12);
+    }
 }

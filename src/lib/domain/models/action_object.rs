@@ -53,7 +53,8 @@ pub struct ActionObject {
         alias = "RequestId",
         alias = "RequestID",
         alias = "requestid",
-        alias = "REQUESTID"
+        alias = "REQUESTID",
+        alias = "request_id"
     )]
     pub ticket_id: u32,
     #[serde(
