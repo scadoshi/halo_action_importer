@@ -26,6 +26,9 @@ pub struct ProcessingStats {
     pub processed: usize,
     pub imported: usize,
     pub skipped: usize,
+    /// The skips that were for a ticket Halo answered 404 for; the rest were
+    /// ids already in Halo.
+    pub skipped_missing_ticket: usize,
     pub failed: Vec<FailedAction>,
 }
 
@@ -230,6 +233,9 @@ pub struct RunTotals {
     pub processed: usize,
     pub imported: usize,
     pub skipped: usize,
+    /// The skips that were for a ticket Halo answered 404 for; the rest were
+    /// ids already in Halo.
+    pub skipped_missing_ticket: usize,
     pub failed: Vec<FailedAction>,
     /// Each file that could not be read, with the reason.
     pub skipped_files: Vec<String>,
@@ -254,6 +260,7 @@ struct Sheet {
     processed: usize,
     imported: usize,
     skipped: usize,
+    skipped_missing_ticket: usize,
     failed: Vec<FailedAction>,
     /// Tickets Halo answered 404 for; their later actions are skipped.
     missing_tickets: HashSet<u32>,
@@ -301,6 +308,7 @@ impl<'a> Run<'a> {
             processed: 0,
             imported: 0,
             skipped: 0,
+            skipped_missing_ticket: 0,
             failed: Vec::new(),
             skipped_files: Vec::new(),
             sheet_times: Vec::new(),
@@ -311,6 +319,7 @@ impl<'a> Run<'a> {
                     totals.processed += stats.processed;
                     totals.imported += stats.imported;
                     totals.skipped += stats.skipped;
+                    totals.skipped_missing_ticket += stats.skipped_missing_ticket;
                     totals.failed.extend(stats.failed);
                 }
                 Err(e) => {
@@ -375,6 +384,7 @@ impl<'a> Run<'a> {
             processed: 0,
             imported: 0,
             skipped: 0,
+            skipped_missing_ticket: 0,
             failed: Vec::new(),
             missing_tickets: HashSet::new(),
             row_times: Vec::new(),
@@ -411,13 +421,16 @@ impl<'a> Run<'a> {
                     sheet.skipped += 1;
                 }
             } else if self.existing_ids.contains(&action_id)
-                || sheet.missing_tickets.contains(&action.ticket_id)
                 || sheet
                     .batch
                     .iter()
                     .any(|queued| queued.action_id() == action_id)
             {
                 sheet.skipped += 1;
+                sheet.pending_skips += 1;
+            } else if sheet.missing_tickets.contains(&action.ticket_id) {
+                sheet.skipped += 1;
+                sheet.skipped_missing_ticket += 1;
                 sheet.pending_skips += 1;
             } else {
                 sheet.batch.push(action);
@@ -449,6 +462,7 @@ impl<'a> Run<'a> {
             processed: sheet.processed,
             imported: sheet.imported,
             skipped: sheet.skipped,
+            skipped_missing_ticket: sheet.skipped_missing_ticket,
             failed: sheet.failed,
         }
     }
@@ -607,7 +621,9 @@ struct SummaryJson {
 
 #[derive(Serialize)]
 struct SkippedBreakdown {
+    /// Actions skipped because their id is already in Halo or came earlier in the run.
     already_exists: usize,
+    /// Actions skipped because Halo answered 404 for their ticket.
     missing_ticket: usize,
 }
 
@@ -640,6 +656,7 @@ pub fn write_summary_json(
         processed: total_processed,
         imported: total_imported,
         skipped: total_skipped,
+        skipped_missing_ticket,
         failed,
         skipped_files,
         sheet_times: _,
@@ -647,13 +664,6 @@ pub fn write_summary_json(
     let (total_processed, total_imported, total_skipped) =
         (*total_processed, *total_imported, *total_skipped);
     let json_path = format!("{}/summary.json", log_dir);
-
-    // Calculate skipped breakdown
-    let missing_ticket_count = failed
-        .iter()
-        .filter(|f| f.error_type == "Ticket not found")
-        .count();
-    let already_exists = total_skipped.saturating_sub(missing_ticket_count);
 
     // Calculate performance metrics
     let rows_per_second = if runtime_secs > 0.0 {
@@ -704,8 +714,8 @@ pub fn write_summary_json(
         total_skipped,
         total_failed: failed.len(),
         skipped_breakdown: SkippedBreakdown {
-            already_exists,
-            missing_ticket: missing_ticket_count,
+            already_exists: total_skipped.saturating_sub(*skipped_missing_ticket),
+            missing_ticket: *skipped_missing_ticket,
         },
         performance: Performance {
             rows_per_second,
@@ -1348,7 +1358,7 @@ mod tests {
                 "total_imported": 2,
                 "total_skipped": 3,
                 "total_failed": 3,
-                "skipped_breakdown": { "already_exists": 2, "missing_ticket": 1 },
+                "skipped_breakdown": { "already_exists": 1, "missing_ticket": 2 },
                 "files_processed": 2,
                 "files_skipped": 1,
                 "error_summary": [
@@ -1427,5 +1437,40 @@ mod tests {
                 .collect();
             assert_eq!(numbers, ["1/3", "2/3", "3/3"], "{}", file.0);
         }
+    }
+
+    #[tokio::test]
+    async fn already_exists_counts_the_ids_skipped_as_already_in_halo() {
+        // 10 repeats; ticket 2 is missing, so 21 and 22 are skipped for that.
+        let rows = &[(1, 10), (1, 10), (2, 20), (2, 21), (2, 22)];
+        let server = TestServer::start(vec![TOKEN, CREATED, Reply::Json(404, "{}")]).await;
+
+        let run = run_files(
+            &server,
+            "sum_exists",
+            &[("a.csv", csv_file(rows))],
+            1,
+            false,
+        )
+        .await;
+
+        assert_eq!(run.summary["skipped_breakdown"]["already_exists"], 1);
+    }
+
+    #[tokio::test]
+    async fn missing_ticket_counts_the_actions_skipped_for_a_missing_ticket() {
+        let rows = &[(1, 10), (1, 10), (2, 20), (2, 21), (2, 22)];
+        let server = TestServer::start(vec![TOKEN, CREATED, Reply::Json(404, "{}")]).await;
+
+        let run = run_files(
+            &server,
+            "sum_missing",
+            &[("a.csv", csv_file(rows))],
+            1,
+            false,
+        )
+        .await;
+
+        assert_eq!(run.summary["skipped_breakdown"]["missing_ticket"], 2);
     }
 }
