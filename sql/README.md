@@ -1,31 +1,25 @@
-# SQL Queries for Halo Action Importer
+# Report queries
 
-This folder contains SQL queries to run on the Halo instance to gather existing action IDs for skip detection.
+These queries are only for `--sync-from-halo`. A normal run reads the local cache and never asks Halo for its IDs. Sync is for when that cache is gone or can't be trusted.
 
-## Files
+Each query returns the action IDs already imported, read from the `cfactionid` custom field. If `ACTION_ID_CUSTOM_FIELD` names a different field, change it in the query too.
 
-### `simple.sql`
-Original query that returns all existing action IDs as a single comma-separated string in one row. Works for smaller datasets but times out with ~3 million IDs.
+- `simple.sql` returns every ID in one comma-separated string.
+- `single_group.sql` returns one slice of the IDs. Set `@num_groups` to the number of reports and `@target_group` to this report's slice, then make one report per slice.
+- `groups.sql` returns all the slices in one result, to check how they split.
 
-### `groups.sql`
-Splits action IDs into multiple rows/groups. Returns N rows, each containing a comma-separated subset of action IDs. Useful for testing group distribution. Configurable via `@num_groups` variable.
+Keep the `--dynamic` line at the top. Halo needs it to allow variables and CTEs.
 
-### `single_group.sql`
-Returns only a single group's IDs. Use this to create multiple separate Halo reports, each targeting a different group (1-10). Set `@num_groups` to total groups and `@target_group` to which group this report should return.
+Put the report UUIDs in `.env`, comma separated:
 
-## Usage
+```env
+ACTION_IDS_RESOURCE_PATHS = uuid-1,uuid-2
+```
 
-### For Production (Multiple Reports)
-1. Create 10 separate reports in Halo, each using `single_group.sql`
-2. Set `@num_groups = 10` and `@target_group = 1` through `10` for each report
-3. Copy all 10 report URLs as comma-separated list in `.env`:
-   ```
-   ACTION_IDS_RESOURCE_PATH=/api/ReportData/uuid-1,/api/ReportData/uuid-2,...
-   ```
-4. **CRITICAL:** Include ALL report URLs or the application will import duplicate actions
+Leave one out and its IDs get imported again.
 
-### For Testing
-Run `groups.sql` to see all groups in one query. Adjust `@num_groups` to test different distributions.
+## Large imports
 
-**Note:** The `--dynamic` declaration at the top is required by Halo's web application to use CTEs and variables.
+Halo reports start timing out once they serve a few million IDs. Splitting the IDs across more reports helps a little, but a dozen reports gets unwieldy fast. Past a certain size the API can't hand back the imported IDs at all, and the only other place to get them is a query against Halo's SQL Server database, which needs that access.
 
+So for a really large import, run a single importer and guard its `cache/` directory. Back it up as you go. Most imports are nowhere near that size.

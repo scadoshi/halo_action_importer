@@ -17,7 +17,7 @@ use tracing::{error, info};
 async fn main() -> anyhow::Result<ExitCode> {
     let Cli {
         only_parse,
-        cache_only,
+        sync_from_halo,
         input_path,
         batch_size,
     } = Cli::parse();
@@ -38,7 +38,7 @@ async fn main() -> anyhow::Result<ExitCode> {
         &config,
         SetupOptions {
             only_parse,
-            cache_only,
+            sync_from_halo,
         },
         &cache,
         input_path,
@@ -47,9 +47,6 @@ async fn main() -> anyhow::Result<ExitCode> {
 
     let total_sheets = files_to_process.len();
     info!("Processing files from directory: {}", input_path);
-    if cache_only {
-        info!("Cache mode: using cached IDs only, skipping report fetching");
-    }
     if batch_size > 1 {
         info!(
             "Batch mode enabled: posting {} actions per request",

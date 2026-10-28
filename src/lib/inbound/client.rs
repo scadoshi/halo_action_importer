@@ -63,32 +63,19 @@ impl ReportClient {
         self
     }
 
+    /// Fetches every configured report, merges each one's ids into `cache`
+    /// as it arrives, and returns all the ids.
+    ///
+    /// # Errors
+    ///
+    /// When a report cannot be fetched or read, or is empty.
     pub async fn get_existing_action_ids(
         &self,
         cache: &Cache,
-        already_fetched: &HashSet<String>,
     ) -> anyhow::Result<HashSet<ActionId>> {
         let mut all_existing_ids = HashSet::new();
-        let total_reports = self.config.action_ids_resource_uuids.len();
-        let to_fetch: Vec<_> = self
-            .config
-            .action_ids_resource_uuids
-            .iter()
-            .filter(|uuid| !already_fetched.contains(*uuid))
-            .collect();
-        let skipped = total_reports - to_fetch.len();
-
-        info!(
-            "Found {} report resource(s), {} already cached, {} to fetch",
-            total_reports,
-            skipped,
-            to_fetch.len()
-        );
-
-        if to_fetch.is_empty() {
-            info!("All resources already cached, skipping report fetching");
-            return Ok(all_existing_ids);
-        }
+        let to_fetch = &self.config.action_ids_resource_uuids;
+        info!("Fetching {} report resource(s)", to_fetch.len());
 
         for (idx, uuid) in to_fetch.iter().enumerate() {
             let report_url = format!("{}api/ReportData/{}", self.config.base_resource_url, uuid);
@@ -250,12 +237,9 @@ mod tests {
     async fn fetch(server: &TestServer, name: &str) -> anyhow::Result<HashSet<ActionId>> {
         let dir = scratch_dir(name);
         let cache = Cache::new(&dir);
-        let result = tokio::time::timeout(
-            HUNG,
-            client(server).get_existing_action_ids(&cache, &HashSet::new()),
-        )
-        .await
-        .expect("the report fetch hung");
+        let result = tokio::time::timeout(HUNG, client(server).get_existing_action_ids(&cache))
+            .await
+            .expect("the report fetch hung");
         std::fs::remove_dir_all(&dir).unwrap();
         result
     }
@@ -329,9 +313,7 @@ mod tests {
             .with_retry_backoff(backoff);
 
         let started = std::time::Instant::now();
-        let result = client
-            .get_existing_action_ids(&Cache::new(&dir), &HashSet::new())
-            .await;
+        let result = client.get_existing_action_ids(&Cache::new(&dir)).await;
         let elapsed = started.elapsed();
         std::fs::remove_dir_all(&dir).unwrap();
 
@@ -366,12 +348,9 @@ mod tests {
             .unwrap()
             .with_retry_backoff(Duration::ZERO);
 
-        let result = tokio::time::timeout(
-            HUNG,
-            client.get_existing_action_ids(&Cache::new(&dir), &HashSet::new()),
-        )
-        .await
-        .expect("the report fetch hung");
+        let result = tokio::time::timeout(HUNG, client.get_existing_action_ids(&Cache::new(&dir)))
+            .await
+            .expect("the report fetch hung");
         std::fs::remove_dir_all(&dir).unwrap();
 
         assert_eq!(result.unwrap(), ids(&[1, 2, 3]));
@@ -410,7 +389,7 @@ mod tests {
         let cache = Cache::new(&dir);
 
         client(&server)
-            .get_existing_action_ids(&cache, &HashSet::new())
+            .get_existing_action_ids(&cache)
             .await
             .unwrap();
 

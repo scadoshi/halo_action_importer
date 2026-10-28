@@ -262,11 +262,11 @@ fn write_atomically(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
 }
 
 /// The two command line switches setup reads: parse without posting, and
-/// trust the ID cache instead of fetching the reports. Both can be on.
+/// fetch the reports into the cache first. Both can be on.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SetupOptions {
     pub only_parse: bool,
-    pub cache_only: bool,
+    pub sync_from_halo: bool,
 }
 
 pub struct SetupResult {
@@ -346,20 +346,25 @@ pub async fn setup_auth_and_existing_ids(
         .context("Failed to authenticate with Halo API")?;
     info!("Authentication successful");
 
-    if options.cache_only {
+    if !options.sync_from_halo {
         info!(
-            "Cache mode: using {} cached IDs, skipping report fetching",
+            "Using {} cached IDs; run with --sync-from-halo to fetch the reports",
             format_number(cache_data.action_ids.len())
         );
+        if cache_data.action_ids.is_empty() {
+            warn!(
+                "The cache is empty, so every action in the files will be posted. If this Halo instance already has imported actions, stop and rerun with --sync-from-halo"
+            );
+        }
         if options.only_parse {
             return Ok((None, cache_data.action_ids));
         }
         return Ok((Some(auth_client), cache_data.action_ids));
     }
 
-    let report_client = ReportClient::new(config.clone(), auth_client.clone())?;
+    let report_client = ReportClient::new(config.clone(), Arc::clone(&auth_client))?;
     let report_ids = report_client
-        .get_existing_action_ids(cache, &cache_data.fetched_resources)
+        .get_existing_action_ids(cache)
         .await
         .context("Failed to fetch existing action IDs from report")?;
     info!(
@@ -448,7 +453,10 @@ pub async fn setup(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
+    use crate::test_server::{Reply, TOKEN, TestServer, config, lines};
 
     #[test]
     fn discovery_takes_spreadsheets_at_the_top_level_only_whatever_the_case() {
@@ -496,6 +504,83 @@ mod tests {
         let expected: HashSet<ActionId> = [42, 7, 100].into_iter().map(ActionId::new).collect();
         assert_eq!(cache.action_ids, expected);
         assert!(cache.fetched_resources.contains("r"));
+    }
+
+    /// Runs setup's auth and cache step against `server` with a cache that
+    /// holds report `report` with id 1 and imported id 5. Returns the ids to
+    /// skip and the cache as read back afterward.
+    async fn existing_ids_with(
+        server: &TestServer,
+        name: &str,
+        report: &str,
+        options: SetupOptions,
+    ) -> (anyhow::Result<HashSet<ActionId>>, CacheData) {
+        let dir = scratch_dir(name);
+        std::fs::write(
+            dir.join(RESOURCE_CACHE_FILE_NAME),
+            format!(r#"[{{"resource_id":"{report}","action_ids":["1"]}}]"#),
+        )
+        .unwrap();
+        std::fs::write(dir.join(IMPORTED_CACHE_FILE_NAME), "5\n").unwrap();
+        let cache = Cache::new(&dir);
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            setup_auth_and_existing_ids(&config(server.base_url()), options, &cache),
+        )
+        .await
+        .expect("setup hung")
+        .map(|(_, ids)| ids);
+
+        let cached = cache.read().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        (result, cached)
+    }
+
+    fn ids(ids: &[u64]) -> HashSet<ActionId> {
+        ids.iter().copied().map(ActionId::new).collect()
+    }
+
+    #[tokio::test]
+    async fn a_default_run_takes_existing_ids_from_the_cache_and_never_asks_for_a_report() {
+        let server = TestServer::start(vec![TOKEN]).await;
+
+        let (result, _) = existing_ids_with(
+            &server,
+            "setup_default",
+            "an-old-report",
+            SetupOptions::default(),
+        )
+        .await;
+
+        assert_eq!(result.unwrap(), ids(&[1, 5]));
+        assert_eq!(lines(&server.requests()), ["POST /auth/token HTTP/1.1"]);
+    }
+
+    #[tokio::test]
+    async fn syncing_from_halo_fetches_every_report_and_merges_it_into_the_cache() {
+        let server = TestServer::start(vec![
+            TOKEN,
+            Reply::Json(200, r#"[{"group_num":"1","action_ids":"2,3"}]"#),
+        ])
+        .await;
+        let options = SetupOptions {
+            sync_from_halo: true,
+            ..SetupOptions::default()
+        };
+
+        // The cache already holds report aaa; a sync asks for it again.
+        let (result, cached) = existing_ids_with(&server, "setup_sync", "aaa", options).await;
+
+        assert_eq!(result.unwrap(), ids(&[1, 2, 3, 5]));
+        assert_eq!(cached.action_ids, ids(&[1, 2, 3, 5]));
+        assert_eq!(
+            lines(&server.requests()),
+            [
+                "POST /auth/token HTTP/1.1",
+                "GET /api/ReportData/aaa HTTP/1.1"
+            ]
+        );
     }
 
     #[test]

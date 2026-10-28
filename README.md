@@ -1,11 +1,11 @@
 # Halo Action Importer
 
-Bulk-imports actions into Halo from CSV and Excel files. Each action carries its own ID in a custom field, so the importer can tell what is already in Halo, skip it, and be rerun or resumed without creating duplicates.
+Bulk-imports actions into Halo from CSV and Excel files. Each action carries its own ID in a custom field. The importer records every ID it posts in a local cache and skips those IDs next time, so a run can be stopped and started again without creating duplicates.
 
 ## Requirements
 
 - A Halo instance with API access, and an API application (client ID and secret).
-- One or more Halo reports that return the action IDs already imported. Templates are in `sql/`. Past about three million IDs, split them across several reports or the report times out.
+- For `--sync-from-halo` only: one or more Halo reports that return the action IDs already imported. See `sql/README.md`.
 - A custom field on actions holding the unique ID.
 - A Rust toolchain.
 
@@ -22,7 +22,7 @@ ACTION_ID_CUSTOM_FIELD = cfactionid
 LOG_LEVEL = info
 ```
 
-`BASE_RESOURCE_URL` keeps its trailing slash; the token URL is derived from it. `ACTION_IDS_RESOURCE_PATHS` is the report UUIDs, comma separated; the importer builds the URLs. `ACTION_ID_CUSTOM_FIELD` is the name of the action custom field that holds the ID, such as `cfactionid`; each action is posted with its ID under that name. `LOG_LEVEL` is one of trace, debug, info, warn, error and defaults to info. A missing or malformed value stops the run and names the variable.
+`BASE_RESOURCE_URL` keeps its trailing slash; the token URL is derived from it. `ACTION_IDS_RESOURCE_PATHS` is the report UUIDs that `--sync-from-halo` reads, comma separated; the importer builds the URLs. `ACTION_ID_CUSTOM_FIELD` is the name of the action custom field that holds the ID, such as `cfactionid`; each action is posted with its ID under that name. `LOG_LEVEL` is one of trace, debug, info, warn, error and defaults to info. A missing or malformed value stops the run and names the variable.
 
 ## Running
 
@@ -32,7 +32,7 @@ Put the files in `input/` and run:
 cargo run --release
 ```
 
-The importer authenticates, fetches the existing action IDs from the reports (or the cache), parses every `.csv`, `.xlsx` and `.xls` in the directory, skips what Halo already has, posts the rest, and writes a log directory for the run.
+The importer authenticates, reads the IDs already imported from `cache/`, parses every `.csv`, `.xlsx` and `.xls` in the directory, skips those IDs, posts the rest, and writes a log directory for the run. It does not ask Halo what it already has unless you pass `--sync-from-halo`.
 
 `cargo run --release -- --help` lists the options. Each has a long name and two shorter spellings; an unknown flag or a bad value stops the run rather than being ignored.
 
@@ -40,10 +40,12 @@ The importer authenticates, fetches the existing action IDs from the reports (or
 |---|---|---|
 | `--input-path <dir>` | `--input`, `--ip` | Directory to read instead of `input/` |
 | `--batch-size <n>` | `--batch`, `--bs` | Actions per request, at least 1 (the default) |
-| `--only-parse-inputs` | `--only-parse`, `--op` | Authenticate, fetch the IDs, parse and report, post nothing |
-| `--only-use-cache` | `--only-cache`, `--oc` | Skip the reports and trust `cache/` for existing IDs |
+| `--only-parse-inputs` | `--only-parse`, `--op` | Authenticate, parse and report, post nothing |
+| `--sync-from-halo` | `--sync`, `--sfh` | Fetch the IDs from the reports and merge them into `cache/` first |
 
-Parse-only is the way to check the reports and the files before a real run. Batching is the way to make a large run fast; a batch is posted in one request.
+Parse-only is the way to check the files before a real run. Batching is the way to make a large run fast; a batch is posted in one request.
+
+Sync when the cache can't be trusted: it was lost, you're on a new machine, or a run hit 504s or timeouts on posts that Halo may have stored anyway. A sync fetches every configured report again, even ones already in the cache.
 
 To run several imports at once, split the files into directories and start one process per directory:
 
@@ -52,7 +54,7 @@ cargo run --release -- --ip input/1 --bs 10 &
 cargo run --release -- --ip input/2 --bs 10 &
 ```
 
-The processes share the cache files under a lock, so they do not re-import each other's actions.
+The processes append to the same cache files under a lock, but each reads the cache only when it starts, so an ID that appears in two directories can be posted twice.
 
 ## Input files
 
@@ -71,7 +73,11 @@ Other columns are ignored.
 
 ## Cache
 
-`cache/existing.json` records, per report UUID, the action IDs it returned, so a rerun does not fetch a report it has already read. `cache/imported` is one action ID per line, appended as imports succeed. Together they let an interrupted run resume where it stopped. Delete `cache/` to start from the reports again. A `cache/existing.json` that is not valid JSON stops the run and names the file rather than being treated as empty; it is written to a temporary file and renamed into place, so an interrupted write leaves the previous version.
+The cache is how the importer knows what Halo already has, so back it up during a large import. `cache/imported` gets one action ID per line, written after each successful post. `cache/existing.json` holds the IDs each report returned on the last sync. An ID in either file is skipped, and so is an ID already posted earlier in the same run.
+
+With an empty cache, every action in the files is posted. If the instance already has imported actions, run with `--sync-from-halo` first.
+
+A `cache/existing.json` that is not valid JSON stops the run and names the file. It is written to a temporary file and renamed into place, so an interrupted write leaves the previous version. A last line in `cache/imported` that a crash cut short is ignored.
 
 ## Output
 

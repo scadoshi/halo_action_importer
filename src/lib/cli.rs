@@ -13,9 +13,10 @@ pub struct Cli {
     #[arg(long = "only-parse-inputs", visible_alias = "only-parse", alias = "op")]
     pub only_parse: bool,
 
-    /// Use the cached action IDs and skip fetching the reports
-    #[arg(long = "only-use-cache", visible_alias = "only-cache", alias = "oc")]
-    pub cache_only: bool,
+    /// Fetch the imported action IDs from the Halo reports and merge them into
+    /// the cache before importing. Without it, the cache alone says what Halo has
+    #[arg(long = "sync-from-halo", visible_alias = "sync", alias = "sfh")]
+    pub sync_from_halo: bool,
 
     /// Directory holding the files to import
     #[arg(
@@ -52,7 +53,7 @@ mod tests {
             cli,
             Cli {
                 only_parse: false,
-                cache_only: false,
+                sync_from_halo: false,
                 input_path: "input".to_string(),
                 batch_size: 1,
             }
@@ -64,7 +65,7 @@ mod tests {
         for args in [
             [
                 "--only-parse-inputs",
-                "--only-use-cache",
+                "--sync-from-halo",
                 "--input-path",
                 "input/1",
                 "--batch-size",
@@ -72,16 +73,16 @@ mod tests {
             ],
             [
                 "--only-parse",
-                "--only-cache",
+                "--sync",
                 "--input",
                 "input/1",
                 "--batch",
                 "10",
             ],
-            ["--op", "--oc", "--ip", "input/1", "--bs", "10"],
+            ["--op", "--sfh", "--ip", "input/1", "--bs", "10"],
         ] {
             let cli = parse(&args).unwrap();
-            assert!(cli.only_parse && cli.cache_only, "{args:?}");
+            assert!(cli.only_parse && cli.sync_from_halo, "{args:?}");
             assert_eq!(cli.input_path, "input/1", "{args:?}");
             assert_eq!(cli.batch_size, 10, "{args:?}");
         }
@@ -104,5 +105,12 @@ mod tests {
     fn an_unknown_flag_is_rejected_instead_of_ignored() {
         assert!(parse(&["--only-parse-input"]).is_err());
         assert!(parse(&["extra"]).is_err());
+    }
+
+    #[test]
+    fn the_cache_only_flag_is_gone_since_the_cache_is_the_default() {
+        for flag in ["--only-use-cache", "--only-cache", "--oc"] {
+            assert!(parse(&[flag]).is_err(), "{flag}");
+        }
     }
 }
