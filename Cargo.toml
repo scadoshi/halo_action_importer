@@ -23,10 +23,74 @@ tokio = { version = "1", features = ["io-util", "net", "time"] }
 # Writes small .xlsx files for the Excel tests; calamine already pulls it in.
 zip = { version = "9", default-features = false }
 
+# scadoshi-rust lints. Thresholds live in clippy.toml.
+#
+# CI makes warnings errors: cargo clippy --all-targets -- -D warnings
+# Silence a lint on one item, with a reason:
+#     #[expect(clippy::as_conversions, reason = "u8 to char is lossless here")]
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
 [lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+# Pedantic lints that cost more than they catch.
+module_name_repetitions = "allow"
+# Library crates flip this to "warn": builders and pure functions get #[must_use].
+must_use_candidate = "allow"
+
+# Docs: # Errors and # Panics sections everywhere.
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+
+# Never ship.
 todo = "deny"
 dbg_macro = "deny"
 unimplemented = "deny"
+
+# No panics outside tests (clippy.toml allows them inside tests).
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"
+string_slice = "deny"
+panic_in_result_fn = "deny"
+exit = "deny"
+
+# Suppressions are #[expect] with a reason, so stale ones surface.
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+
+# Unsafe explains itself, one operation per block.
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "warn"
+
+# Casts and arithmetic that can silently lose information.
+as_conversions = "warn"
+arithmetic_side_effects = "warn"
+
+# API shape.
+fn_params_excessive_bools = "warn"
+struct_excessive_bools = "warn"
+clone_on_ref_ptr = "warn"
+too_many_arguments = "warn"
+large_enum_variant = "warn"
+redundant_clone = "warn"
+needless_collect = "warn"
+or_fun_call = "warn"
+unnecessary_wraps = "warn"
+unused_async = "warn"
+
+# Logging goes through tracing; a CLI's own output takes an #[expect].
+print_stdout = "warn"
+print_stderr = "warn"
 
 [[bin]]
 name = "halo_action_importer"

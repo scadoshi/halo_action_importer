@@ -18,6 +18,11 @@ const SECONDS_PER_DAY: u32 = 86_400;
 
 fn excel_serial_to_datetime(serial: f64) -> Option<NaiveDateTime> {
     let excel_epoch = NaiveDate::from_ymd_opt(1899, 12, 30)?;
+    #[expect(
+        clippy::as_conversions,
+        clippy::cast_possible_truncation,
+        reason = "std has no checked f64 to i64; the cast saturates, and a day count out of range fails try_days below"
+    )]
     let mut days = serial.floor() as i64;
     // Excel stores times as fractions of a day, so a time typed as 10:00:00
     // can come back a hair short; round to the nearest second.
@@ -51,6 +56,12 @@ const TICKET_ID_HEADERS: &[&str] = &[
 fn ticket_id_from_float(value: f64) -> Option<u32> {
     let in_range = (0.0..=f64::from(u32::MAX)).contains(&value);
     if in_range && value.fract() == 0.0 {
+        #[expect(
+            clippy::as_conversions,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "value is whole and within u32, checked above, so the cast is exact"
+        )]
         Some(value as u32)
     } else {
         None
