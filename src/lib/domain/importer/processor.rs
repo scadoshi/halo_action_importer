@@ -637,7 +637,9 @@ struct Performance {
 #[derive(Serialize)]
 struct ErrorTypeSummary {
     error_type: String,
-    count: usize,
+    /// How many actions failed this way.
+    failures: usize,
+    /// The tickets those actions belong to, each once, in order.
     affected_tickets: Vec<u32>,
 }
 
@@ -692,11 +694,12 @@ pub fn write_summary_json(
     let error_summary: Vec<ErrorTypeSummary> = error_map
         .into_iter()
         .map(|(error_type, mut tickets)| {
+            let failures = tickets.len();
             tickets.sort_unstable();
             tickets.dedup();
             ErrorTypeSummary {
                 error_type,
-                count: tickets.len(),
+                failures,
                 affected_tickets: tickets,
             }
         })
@@ -1362,8 +1365,8 @@ mod tests {
                 "files_processed": 2,
                 "files_skipped": 1,
                 "error_summary": [
-                    { "error_type": "Server error", "count": 1, "affected_tickets": [3] },
-                    { "error_type": "Ticket not found", "count": 1, "affected_tickets": [2] },
+                    { "error_type": "Server error", "failures": 2, "affected_tickets": [3] },
+                    { "error_type": "Ticket not found", "failures": 1, "affected_tickets": [2] },
                 ],
             })
         );
@@ -1472,5 +1475,33 @@ mod tests {
         .await;
 
         assert_eq!(run.summary["skipped_breakdown"]["missing_ticket"], 2);
+    }
+
+    #[tokio::test]
+    async fn the_error_summary_counts_failures_and_lists_each_ticket_once() {
+        let rows = &[(1, 10), (1, 11), (2, 20)];
+        let server = TestServer::start(vec![
+            TOKEN,
+            Reply::Json(500, "{}"),
+            Reply::Json(500, "{}"),
+            Reply::Json(500, "{}"),
+        ])
+        .await;
+
+        let run = run_files(
+            &server,
+            "sum_failures",
+            &[("a.csv", csv_file(rows))],
+            1,
+            false,
+        )
+        .await;
+
+        assert_eq!(
+            run.summary["error_summary"],
+            serde_json::json!([
+                { "error_type": "Server error", "failures": 3, "affected_tickets": [1, 2] },
+            ])
+        );
     }
 }
