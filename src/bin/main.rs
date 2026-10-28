@@ -91,7 +91,7 @@ async fn main() -> anyhow::Result<ExitCode> {
         write_retry_csv(&log_dir_path, &totals.failed)?;
     }
 
-    write_summary_json(&log_dir_path, &totals, total_runtime, total_sheets)?;
+    write_summary_json(&log_dir_path, &totals, total_runtime)?;
 
     Ok(ExitCode::from(code))
 }

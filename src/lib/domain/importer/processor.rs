@@ -237,6 +237,8 @@ pub struct RunTotals {
     /// ids already in Halo.
     pub skipped_missing_ticket: usize,
     pub failed: Vec<FailedAction>,
+    /// How many files were read, whatever became of their rows.
+    pub files_read: usize,
     /// Each file that could not be read, with the reason.
     pub skipped_files: Vec<String>,
     /// How long each file took, in seconds.
@@ -310,6 +312,7 @@ impl<'a> Run<'a> {
             skipped: 0,
             skipped_missing_ticket: 0,
             failed: Vec::new(),
+            files_read: 0,
             skipped_files: Vec::new(),
             sheet_times: Vec::new(),
         };
@@ -321,6 +324,7 @@ impl<'a> Run<'a> {
                     totals.skipped += stats.skipped;
                     totals.skipped_missing_ticket += stats.skipped_missing_ticket;
                     totals.failed.extend(stats.failed);
+                    totals.files_read += 1;
                 }
                 Err(e) => {
                     error!("Failed to read file {:?}: {}", file_name, e);
@@ -643,7 +647,7 @@ struct ErrorTypeSummary {
     affected_tickets: Vec<u32>,
 }
 
-/// Writes summary.json for a run of `total_sheets` files to `log_dir`.
+/// Writes summary.json for a run to `log_dir`.
 ///
 /// # Errors
 ///
@@ -652,7 +656,6 @@ pub fn write_summary_json(
     log_dir: &str,
     totals: &RunTotals,
     runtime_secs: f64,
-    total_sheets: usize,
 ) -> anyhow::Result<()> {
     let RunTotals {
         processed: total_processed,
@@ -660,6 +663,7 @@ pub fn write_summary_json(
         skipped: total_skipped,
         skipped_missing_ticket,
         failed,
+        files_read,
         skipped_files,
         sheet_times: _,
     } = totals;
@@ -725,7 +729,7 @@ pub fn write_summary_json(
             actions_per_minute,
             average_time_per_action_seconds: avg_time_per_action,
         },
-        files_processed: total_sheets,
+        files_processed: *files_read,
         files_skipped: skipped_files.len(),
         error_summary,
     };
@@ -1094,7 +1098,7 @@ mod tests {
         if !totals.failed.is_empty() {
             write_retry_csv(log_dir_str, &totals.failed).unwrap();
         }
-        write_summary_json(log_dir_str, &totals, 1.0, files.len()).unwrap();
+        write_summary_json(log_dir_str, &totals, 1.0).unwrap();
         let retry_csv = std::fs::read_to_string(log_dir.join("retry.csv")).ok();
         let mut summary: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(log_dir.join("summary.json")).unwrap())
@@ -1362,7 +1366,7 @@ mod tests {
                 "total_skipped": 3,
                 "total_failed": 3,
                 "skipped_breakdown": { "already_exists": 1, "missing_ticket": 2 },
-                "files_processed": 2,
+                "files_processed": 1,
                 "files_skipped": 1,
                 "error_summary": [
                     { "error_type": "Server error", "failures": 2, "affected_tickets": [3] },
@@ -1502,6 +1506,31 @@ mod tests {
             serde_json::json!([
                 { "error_type": "Server error", "failures": 3, "affected_tickets": [1, 2] },
             ])
+        );
+    }
+
+    #[tokio::test]
+    async fn files_processed_counts_only_the_files_that_were_read() {
+        let server = TestServer::start(vec![TOKEN, CREATED]).await;
+
+        let run = run_files(
+            &server,
+            "sum_files",
+            &[
+                ("a.csv", csv_file(&[(1, 10)])),
+                ("broken.xlsx", b"not a workbook".to_vec()),
+            ],
+            1,
+            false,
+        )
+        .await;
+
+        assert_eq!(
+            (
+                &run.summary["files_processed"],
+                &run.summary["files_skipped"]
+            ),
+            (&serde_json::json!(1), &serde_json::json!(1))
         );
     }
 }
