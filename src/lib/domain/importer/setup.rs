@@ -98,20 +98,28 @@ impl Cache {
             fetched_resources.insert(resource.resource_id);
         }
 
-        // Read imported IDs (simple text file, one ID per line)
+        // Imported IDs, one per line. Each write ends in a newline, so a last
+        // line without one is a write cut short and is left out.
         let txt_path = self.dir.join(IMPORTED_CACHE_FILE_NAME);
-        if txt_path.exists()
-            && let Ok(file) = std::fs::File::open(&txt_path)
-        {
-            let reader = std::io::BufReader::new(file);
-            let lines: Vec<String> = std::io::BufRead::lines(reader)
-                .map_while(Result::ok)
-                .collect();
-            action_ids.extend(parse_action_ids(
-                lines.iter().map(String::as_str),
-                &txt_path.display().to_string(),
-            ));
+        let imported = match std::fs::read_to_string(&txt_path) {
+            Ok(contents) => contents,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => {
+                return Err(e)
+                    .with_context(|| format!("Failed to read cache file: {}", txt_path.display()));
+            }
+        };
+        let complete = imported
+            .rfind('\n')
+            .and_then(|end| imported.get(..end))
+            .unwrap_or_default();
+        if complete.len() + 1 < imported.len() {
+            warn!("Ignored an unfinished last line in {}", txt_path.display());
         }
+        action_ids.extend(parse_action_ids(
+            complete.lines(),
+            &txt_path.display().to_string(),
+        ));
 
         Ok(CacheData {
             action_ids,
@@ -198,9 +206,12 @@ impl Cache {
         file.lock_exclusive()
             .with_context(|| "Failed to acquire exclusive lock on imported cache file")?;
 
-        for id in ids {
-            writeln!(file, "{}", id)?;
-        }
+        // One write per call, so a crash leaves at most one unfinished last
+        // line, which `read` leaves out.
+        let lines: String = ids.iter().map(|id| format!("{id}\n")).collect();
+        file.write_all(lines.as_bytes())
+            .and_then(|()| file.sync_data())
+            .with_context(|| format!("Failed to write imported cache file: {}", path.display()))?;
 
         // Lock is automatically released when file is dropped
         Ok(())
@@ -485,6 +496,34 @@ mod tests {
         let expected: HashSet<ActionId> = [42, 7, 100].into_iter().map(ActionId::new).collect();
         assert_eq!(cache.action_ids, expected);
         assert!(cache.fetched_resources.contains("r"));
+    }
+
+    #[test]
+    fn a_torn_last_line_in_the_imported_cache_is_left_out() {
+        let dir = scratch_dir("cache_torn");
+        std::fs::write(dir.join(IMPORTED_CACHE_FILE_NAME), "1\n2\n12").unwrap();
+
+        let cache = Cache::new(&dir).read().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        let expected: HashSet<ActionId> = [1, 2].into_iter().map(ActionId::new).collect();
+        assert_eq!(cache.action_ids, expected);
+    }
+
+    #[test]
+    fn recorded_ids_are_read_back_after_what_was_there() {
+        let dir = scratch_dir("cache_record");
+        let cache = Cache::new(&dir);
+
+        cache.record_imported(&["1".to_string()]).unwrap();
+        cache
+            .record_imported(&["2".to_string(), "3".to_string()])
+            .unwrap();
+
+        let written = std::fs::read_to_string(dir.join(IMPORTED_CACHE_FILE_NAME)).unwrap();
+        let read = cache.read().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(written, "1\n2\n3\n");
+        assert_eq!(read.action_ids.len(), 3);
     }
 
     #[test]
