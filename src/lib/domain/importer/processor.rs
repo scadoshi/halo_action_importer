@@ -51,7 +51,7 @@ struct TicketGroupedResult {
 /// When a ticket group fails, all actions for that ticket are marked as failed.
 async fn retry_by_ticket_groups(
     client: &ActionClient,
-    batch: &[ActionObject],
+    batch: Vec<ActionObject>,
 ) -> TicketGroupedResult {
     let mut result = TicketGroupedResult {
         missing_tickets: BTreeSet::new(),
@@ -60,12 +60,13 @@ async fn retry_by_ticket_groups(
     };
 
     // Group actions by ticket_id
+    let batch_len = batch.len();
     let mut ticket_groups: BTreeMap<u32, Vec<ActionObject>> = BTreeMap::new();
     for action in batch {
         ticket_groups
             .entry(action.ticket_id)
             .or_default()
-            .push(action.clone());
+            .push(action);
     }
 
     info!(
@@ -75,7 +76,7 @@ async fn retry_by_ticket_groups(
 
     // Try each ticket group
     for (ticket_id, actions) in ticket_groups {
-        match client.post_action_objects(actions.clone()).await {
+        match client.post_action_objects(&actions).await {
             Ok(()) => {
                 // All actions for this ticket imported successfully
                 result.imported_actions.extend(actions);
@@ -116,7 +117,7 @@ async fn retry_by_ticket_groups(
     info!(
         "Ticket group retry complete: recovered {}/{} actions, identified {} missing ticket(s)",
         result.imported_actions.len(),
-        batch.len(),
+        batch_len,
         result.missing_tickets.len()
     );
 
@@ -138,19 +139,19 @@ struct FailedBatch {
 /// error fails the whole batch. `label` names the batch in the log.
 async fn settle_failed_batch(
     client: &ActionClient,
-    batch: &[ActionObject],
+    batch: Vec<ActionObject>,
     error: PostError,
     missing_tickets: &mut HashSet<u32>,
     label: &str,
 ) -> FailedBatch {
     let not_found = matches!(error, PostError::TicketNotFound { .. });
+    let batch_len = batch.len();
 
-    if not_found && batch.len() > 1 {
+    if not_found && batch_len > 1 {
         // Use ticket-grouped retry to identify missing tickets
         warn!(
             "{} of {} actions failed with 'not found' error - retrying by ticket groups",
-            label,
-            batch.len()
+            label, batch_len
         );
 
         let search_result = retry_by_ticket_groups(client, batch).await;
@@ -175,7 +176,7 @@ async fn settle_failed_batch(
         info!(
             "Ticket group retry complete: recovered {}/{} actions, identified {} missing ticket(s)",
             search_result.imported_actions.len(),
-            batch.len(),
+            batch_len,
             search_result.missing_tickets.len()
         );
 
@@ -203,7 +204,7 @@ async fn settle_failed_batch(
             error
         );
         failed.push(FailedAction {
-            action: action.clone(),
+            action,
             error_type: error.error_type().to_string(),
         });
     }
@@ -531,7 +532,7 @@ impl<'a> Run<'a> {
             sheet.batch_start = Instant::now();
             return;
         };
-        match client.post_action_objects(batch.clone()).await {
+        match client.post_action_objects(&batch).await {
             Ok(()) => {
                 let batch_count = batch.len();
                 sheet.imported += batch_count;
@@ -583,8 +584,9 @@ impl<'a> Run<'a> {
                 record_imported(self.config.cache, &mut self.existing_ids, &batch);
             }
             Err(e) => {
+                let batch_len = batch.len();
                 let outcome =
-                    settle_failed_batch(client, &batch, e, &mut self.missing_tickets, label).await;
+                    settle_failed_batch(client, batch, e, &mut self.missing_tickets, label).await;
                 if outcome.regrouped {
                     sheet.batch_number += 1;
                 }
@@ -593,7 +595,7 @@ impl<'a> Run<'a> {
                 if recovered > 0 {
                     record_imported(self.config.cache, &mut self.existing_ids, &outcome.imported);
                     let avg_action_time =
-                        sheet.batch_start.elapsed().as_secs_f64() / batch.len() as f64;
+                        sheet.batch_start.elapsed().as_secs_f64() / batch_len as f64;
                     sheet
                         .row_times
                         .extend(std::iter::repeat_n(avg_action_time, recovered));
@@ -635,14 +637,16 @@ pub fn write_retry_csv<'a>(
             .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
             .unwrap_or_default();
 
-        writer.write_record(&[
-            action.ticket_id.to_string(),
-            action.action_id().to_string(),
-            date_str,
-            action.actionwho.clone(),
-            action.note.clone(),
-            action.outcome.clone(),
-            failed_action.error_type.clone(),
+        let ticket_id = action.ticket_id.to_string();
+        let action_id = action.action_id().to_string();
+        writer.write_record([
+            ticket_id.as_str(),
+            action_id.as_str(),
+            date_str.as_str(),
+            action.actionwho.as_str(),
+            action.note.as_str(),
+            action.outcome.as_str(),
+            failed_action.error_type.as_str(),
         ])?;
     }
 

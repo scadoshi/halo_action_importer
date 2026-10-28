@@ -156,8 +156,8 @@ impl Cache {
         // A cached entry that is not a number is kept as it was.
         let position = resources.iter().position(|r| r.resource_id == resource_id);
         let existing = position
-            .and_then(|index| resources.get(index))
-            .map(|r| r.action_ids.clone())
+            .and_then(|index| resources.get_mut(index))
+            .map(|r| std::mem::take(&mut r.action_ids))
             .unwrap_or_default();
         let mut numeric: BTreeSet<ActionId> = action_ids.iter().copied().collect();
         let mut other: Vec<String> = Vec::new();
@@ -451,7 +451,7 @@ pub async fn setup(
     let (auth_client, existing_ids) = setup_auth_and_existing_ids(config, options, cache).await?;
     let action_client = auth_client
         .as_ref()
-        .map(|auth| ActionClient::new(config.clone(), auth.clone()))
+        .map(|auth| ActionClient::new(config.clone(), Arc::clone(auth)))
         .transpose()?;
 
     Ok(SetupResult {

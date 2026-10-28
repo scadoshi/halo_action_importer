@@ -3,6 +3,7 @@ use std::path::Path;
 use anyhow::Context;
 use calamine::{Data, Reader as CalamineReader};
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
+use serde::Deserialize;
 
 use crate::domain::models::action_object::ActionObject;
 use crate::inbound::file::RowError;
@@ -295,16 +296,16 @@ impl Actions {
         if !has_any_data {
             return Some(None);
         }
-        let json_value = serde_json::Value::Object(record.clone());
         let available_fields: Vec<String> = record.keys().cloned().collect();
-        match serde_json::from_value::<ActionObject>(json_value.clone()) {
+        let json_value = serde_json::Value::Object(record);
+        match ActionObject::deserialize(&json_value) {
             Ok(action_object) => {
                 if action_object.actiondate.is_none() {
                     tracing::warn!(
                         "Date field is None after deserialization. Available fields: {:?}",
                         available_fields
                     );
-                    if let Some(date_val) = record.get("actionDate") {
+                    if let Some(date_val) = json_value.get("actionDate") {
                         tracing::warn!("Date value in JSON was: {:?}", date_val);
                     }
                 }

@@ -48,7 +48,7 @@ impl ActionClient {
     /// A [`PostError`] saying why Halo did not take the batch.
     pub async fn post_action_objects(
         &self,
-        action_objects: Vec<ActionObject>,
+        action_objects: &[ActionObject],
     ) -> Result<(), PostError> {
         if action_objects.is_empty() {
             return Ok(());
@@ -70,7 +70,7 @@ impl ActionClient {
         loop {
             let response = self
                 .http_client
-                .post(endpoint.clone())
+                .post(endpoint.as_str())
                 .header("Authorization", &auth_token)
                 .header("Content-Type", "application/json; charset=utf-8")
                 .json(&payload)
@@ -220,12 +220,10 @@ mod tests {
         ])
         .await;
 
-        let result = tokio::time::timeout(
-            HUNG,
-            client(&server).post_action_objects(vec![action(1, 10)]),
-        )
-        .await
-        .expect("the post hung");
+        let result =
+            tokio::time::timeout(HUNG, client(&server).post_action_objects(&[action(1, 10)]))
+                .await
+                .expect("the post hung");
 
         assert!(result.is_ok(), "{result:?}");
         let requests = server.requests();
@@ -251,12 +249,10 @@ mod tests {
         ])
         .await;
 
-        let result = tokio::time::timeout(
-            HUNG,
-            client(&server).post_action_objects(vec![action(1, 10)]),
-        )
-        .await
-        .expect("the post hung");
+        let result =
+            tokio::time::timeout(HUNG, client(&server).post_action_objects(&[action(1, 10)]))
+                .await
+                .expect("the post hung");
 
         let message = format!("{:#}", result.unwrap_err());
         assert!(message.contains("401"), "{message}");
@@ -270,12 +266,10 @@ mod tests {
     async fn a_post_answered_504_is_an_error_and_not_sent_again() {
         let server = TestServer::start(vec![TOKEN, Reply::Json(504, "{}")]).await;
 
-        let result = tokio::time::timeout(
-            HUNG,
-            client(&server).post_action_objects(vec![action(1, 10)]),
-        )
-        .await
-        .expect("the post hung");
+        let result =
+            tokio::time::timeout(HUNG, client(&server).post_action_objects(&[action(1, 10)]))
+                .await
+                .expect("the post hung");
 
         let message = format!("{:#}", result.unwrap_err());
         assert!(message.contains("504"), "{message}");
@@ -289,12 +283,10 @@ mod tests {
     async fn a_post_hit_by_a_network_error_is_an_error_and_not_sent_again() {
         let server = TestServer::start(vec![TOKEN, Reply::Hangup]).await;
 
-        let result = tokio::time::timeout(
-            HUNG,
-            client(&server).post_action_objects(vec![action(1, 10)]),
-        )
-        .await
-        .expect("the post hung");
+        let result =
+            tokio::time::timeout(HUNG, client(&server).post_action_objects(&[action(1, 10)]))
+                .await
+                .expect("the post hung");
 
         assert!(matches!(result, Err(PostError::Network(_))), "{result:?}");
         assert_eq!(
@@ -311,7 +303,7 @@ mod tests {
         let client =
             ActionClient::with_request_timeout(config, auth_client, SHORT_TIMEOUT).unwrap();
 
-        let result = tokio::time::timeout(HUNG, client.post_action_objects(vec![action(1, 10)]))
+        let result = tokio::time::timeout(HUNG, client.post_action_objects(&[action(1, 10)]))
             .await
             .expect("the post hung");
 
@@ -325,12 +317,9 @@ mod tests {
     /// Posts one action to a server that answers `status` with `body`.
     async fn post_answered(status: u16, body: &'static str) -> Result<(), PostError> {
         let server = TestServer::start(vec![TOKEN, Reply::Json(status, body)]).await;
-        tokio::time::timeout(
-            HUNG,
-            client(&server).post_action_objects(vec![action(1, 10)]),
-        )
-        .await
-        .expect("the post hung")
+        tokio::time::timeout(HUNG, client(&server).post_action_objects(&[action(1, 10)]))
+            .await
+            .expect("the post hung")
     }
 
     #[tokio::test]
@@ -394,7 +383,7 @@ mod tests {
             "rusty who",
             ActionId::new(897),
         );
-        let response = action_client.post_action_objects(vec![action_object]).await;
+        let response = action_client.post_action_objects(&[action_object]).await;
         assert!(response.is_ok());
     }
 }
