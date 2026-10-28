@@ -89,7 +89,7 @@ pub struct ActionObject {
     )]
     pub action_id: ActionId,
     #[serde(default = "default_is_import", rename = "_isimport")]
-    pub _isimport: bool,
+    pub is_import: bool,
 }
 
 fn default_outcome() -> String {
@@ -170,7 +170,7 @@ impl Serialize for ActionPayload<'_> {
 
         let action = self.action;
         map.serialize_entry("__rowNum__", &Option::<u32>::None)?;
-        map.serialize_entry("_isimport", &action._isimport)?;
+        map.serialize_entry("_isimport", &action.is_import)?;
 
         if let Some(date) = &action.actiondate {
             let arizona_offset = FixedOffset::west_opt(7 * 3600).unwrap();
@@ -223,7 +223,7 @@ impl ActionObject {
             note: note.into(),
             actionwho: actionwho.into(),
             action_id,
-            _isimport: true,
+            is_import: true,
         }
     }
 
@@ -293,6 +293,16 @@ mod tests {
         assert!(serde_json::from_value::<ActionObject>(row("abc")).is_err());
         assert!(serde_json::from_value::<ActionObject>(row("")).is_err());
         assert!(serde_json::from_value::<ActionObject>(row("12")).is_ok());
+    }
+
+    #[test]
+    fn an_isimport_column_still_reads_into_is_import() {
+        let row = serde_json::json!({
+            "ticket_id": 1, "note": "n", "actionwho": "w", "action_id": "1",
+            "actiondate": null, "_isimport": false
+        });
+        let action: ActionObject = serde_json::from_value(row).unwrap();
+        assert!(!action.is_import);
     }
 
     #[test]
