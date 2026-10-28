@@ -392,6 +392,11 @@ pub async fn setup_auth_and_existing_ids(
     Ok((Some(auth_client), all_ids))
 }
 
+/// The CSV and Excel files at the top level of `input_path`, by file name.
+///
+/// # Errors
+///
+/// When the directory is missing or cannot be read.
 pub fn discover_files(input_path: &str) -> anyhow::Result<Vec<(PathBuf, String)>> {
     let input_dir = Path::new(input_path);
     if !input_dir.exists() {
@@ -419,6 +424,7 @@ pub fn discover_files(input_path: &str) -> anyhow::Result<Vec<(PathBuf, String)>
             }
         }
     }
+    files_to_process.sort_by(|(_, a), (_, b)| a.cmp(b));
     Ok(files_to_process)
 }
 
@@ -474,6 +480,27 @@ mod tests {
         names.sort();
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(names, ["a.csv", "b.XLSX", "c.xls"]);
+    }
+
+    #[test]
+    fn discovered_files_come_in_name_order() {
+        let dir = scratch_dir("discover_order");
+        let names = [
+            "m.csv", "b.csv", "z.xlsx", "a.csv", "q.xls", "c.csv", "y.csv", "d.csv",
+        ];
+        for name in names {
+            std::fs::write(dir.join(name), "").unwrap();
+        }
+
+        let found: Vec<String> = discover_files(dir.to_str().unwrap())
+            .unwrap()
+            .into_iter()
+            .map(|(_, name)| name)
+            .collect();
+        std::fs::remove_dir_all(&dir).unwrap();
+        let mut sorted = names.map(str::to_string).to_vec();
+        sorted.sort();
+        assert_eq!(found, sorted);
     }
 
     #[test]
