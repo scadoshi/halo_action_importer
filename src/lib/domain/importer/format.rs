@@ -13,13 +13,17 @@ pub fn format_number(n: usize) -> String {
     result
 }
 
+const SECONDS_PER_MINUTE: u64 = 60;
+const SECONDS_PER_HOUR: u64 = 60 * SECONDS_PER_MINUTE;
+const SECONDS_PER_DAY: u64 = 24 * SECONDS_PER_HOUR;
+
 /// Whole seconds as `1d 2h 3m 4s`, dropping zero parts, never empty.
 pub fn format_duration(seconds: f64) -> String {
     let total_seconds = seconds as u64;
-    let days = total_seconds / 86400;
-    let hours = (total_seconds % 86400) / 3600;
-    let minutes = (total_seconds % 3600) / 60;
-    let secs = total_seconds % 60;
+    let days = total_seconds / SECONDS_PER_DAY;
+    let hours = (total_seconds % SECONDS_PER_DAY) / SECONDS_PER_HOUR;
+    let minutes = (total_seconds % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE;
+    let secs = total_seconds % SECONDS_PER_MINUTE;
 
     let mut parts = Vec::new();
     if days > 0 {

@@ -92,8 +92,15 @@ pub struct ActionObject {
     pub is_import: bool,
 }
 
+/// The outcome of a row that has none.
+const DEFAULT_OUTCOME: &str = "Imported Note";
+
+/// Arizona's offset from UTC: seven hours west all year, since Arizona keeps
+/// no daylight saving time. Action dates in the files are Arizona time.
+const ARIZONA: Option<FixedOffset> = FixedOffset::west_opt(7 * 60 * 60);
+
 fn default_outcome() -> String {
-    "Imported Note".to_string()
+    DEFAULT_OUTCOME.to_string()
 }
 
 fn default_is_import() -> bool {
@@ -165,7 +172,7 @@ impl Serialize for ActionPayload<'_> {
     where
         S: Serializer,
     {
-        use serde::ser::SerializeMap;
+        use serde::ser::{self, SerializeMap};
         let mut map = serializer.serialize_map(None)?;
 
         let action = self.action;
@@ -173,7 +180,8 @@ impl Serialize for ActionPayload<'_> {
         map.serialize_entry("_isimport", &action.is_import)?;
 
         if let Some(date) = &action.actiondate {
-            let arizona_offset = FixedOffset::west_opt(7 * 3600).unwrap();
+            let arizona_offset = ARIZONA
+                .ok_or_else(|| ser::Error::custom("the Arizona UTC offset is out of range"))?;
             let arizona_dt = arizona_offset
                 .from_local_datetime(date)
                 .earliest()

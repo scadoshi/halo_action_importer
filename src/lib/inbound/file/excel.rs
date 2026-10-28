@@ -7,13 +7,19 @@ use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use crate::domain::models::action_object::ActionObject;
 use crate::inbound::file::RowError;
 
+/// Seconds in a day: an Excel serial date counts days, and its fraction is
+/// the time of day.
+const SECONDS_PER_DAY: u32 = 86_400;
+
 fn excel_serial_to_datetime(serial: f64) -> Option<NaiveDateTime> {
     let excel_epoch = NaiveDate::from_ymd_opt(1899, 12, 30)?;
     let mut days = serial.floor() as i64;
     // Excel stores times as fractions of a day, so a time typed as 10:00:00
     // can come back a hair short; round to the nearest second.
-    let mut seconds_in_day = (serial.fract() * 86400.0).round().max(0.0) as u32;
-    if seconds_in_day >= 86400 {
+    let mut seconds_in_day = (serial.fract() * f64::from(SECONDS_PER_DAY))
+        .round()
+        .max(0.0) as u32;
+    if seconds_in_day >= SECONDS_PER_DAY {
         days = days.checked_add(1)?;
         seconds_in_day = 0;
     }
@@ -505,7 +511,7 @@ mod tests {
                 .and_hms_opt(h, min, sec)
                 .unwrap()
         };
-        let serial = |seconds: f64| 45658.0 + seconds / 86400.0;
+        let serial = |seconds: f64| 45658.0 + seconds / f64::from(SECONDS_PER_DAY);
         assert_eq!(
             excel_serial_to_datetime(serial(35_999.999_9)),
             Some(at(1, 10, 0, 0))
