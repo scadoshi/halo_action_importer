@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ffi::OsStr;
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -41,7 +41,8 @@ pub struct UnparsedRow {
 }
 
 struct TicketGroupedResult {
-    missing_tickets: HashSet<u32>,
+    /// In ticket order, so the log lists them that way.
+    missing_tickets: BTreeSet<u32>,
     imported_actions: Vec<ActionObject>,
     failed_actions: Vec<FailedAction>,
 }
@@ -54,7 +55,7 @@ async fn retry_by_ticket_groups(
     batch: &[ActionObject],
 ) -> TicketGroupedResult {
     let mut result = TicketGroupedResult {
-        missing_tickets: HashSet::new(),
+        missing_tickets: BTreeSet::new(),
         imported_actions: Vec::new(),
         failed_actions: Vec::new(),
     };
@@ -1743,5 +1744,33 @@ mod tests {
                 "Validation error",
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn missing_tickets_found_in_one_batch_are_logged_in_ticket_order() {
+        let rows: Vec<(u32, u64)> = (1..=12).rev().map(|t| (t, u64::from(t) * 10)).collect();
+        let mut replies = vec![TOKEN, Reply::Json(404, "{}")];
+        replies.extend([Reply::Json(404, "{}"); 12]);
+        let server = TestServer::start(replies).await;
+        capture_logs();
+
+        run_files(
+            &server,
+            "missing_order",
+            &[("a.csv", csv_file(&rows))],
+            12,
+            false,
+        )
+        .await;
+
+        let text = captured_logs();
+        let logged: Vec<u32> = text
+            .lines()
+            .filter(|line| line.ends_with("will skip future actions for this ticket"))
+            .filter_map(|line| line.split("Ticket ID: ").nth(1))
+            .filter_map(|rest| rest.split(' ').next())
+            .map(|ticket| ticket.parse().unwrap())
+            .collect();
+        assert_eq!(logged, (1..=12).collect::<Vec<u32>>());
     }
 }
