@@ -34,7 +34,7 @@ cargo run --release
 
 The importer authenticates, reads the IDs already imported from `cache/`, parses every `.csv`, `.xlsx` and `.xls` in the directory, skips those IDs, posts the rest, and writes a log directory for the run. It does not ask Halo what it already has unless you pass `--sync-from-halo`.
 
-`cargo run --release -- --help` lists the options. Each has a long name and two shorter spellings; an unknown flag or a bad value stops the run rather than being ignored.
+`cargo run --release -- --help` lists the options. All but `--fresh` also have two shorter spellings. An unknown flag or a bad value stops the run rather than being ignored.
 
 | Option | Also | Does |
 |---|---|---|
@@ -42,6 +42,7 @@ The importer authenticates, reads the IDs already imported from `cache/`, parses
 | `--batch-size <n>` | `--batch`, `--bs` | Actions per request, at least 1 (the default) |
 | `--only-parse-inputs` | `--only-parse`, `--op` | Authenticate, parse and report, post nothing |
 | `--sync-from-halo` | `--sync`, `--sfh` | Fetch the IDs from the reports and merge them into `cache/` first |
+| `--fresh` | | Start a new import with an empty cache |
 
 Parse-only is the way to check the files before a real run. Batching is the way to make a large run fast; a batch is posted in one request.
 
@@ -75,7 +76,7 @@ Other columns are ignored.
 
 The cache is how the importer knows what Halo already has, so back it up during a large import. `cache/imported` gets one action ID per line, written after each successful post. `cache/existing.json` holds the IDs each report returned on the last sync. An ID in either file is skipped, and so is an ID already posted earlier in the same run.
 
-With an empty cache, every action in the files is posted. If the instance already has imported actions, run with `--sync-from-halo` first.
+A run with an empty cache stops before it posts anything, since it would post every action in the files. Pass `--sync-from-halo` to fill the cache from the reports, or `--fresh` when the instance has no imported actions yet. A parse-only run doesn't need either.
 
 A `cache/existing.json` that is not valid JSON stops the run and names the file. It is written to a temporary file and renamed into place, so an interrupted write leaves the previous version. A last line in `cache/imported` that a crash cut short is ignored.
 

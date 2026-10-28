@@ -18,6 +18,11 @@ pub struct Cli {
     #[arg(long = "sync-from-halo", visible_alias = "sync", alias = "sfh")]
     pub sync_from_halo: bool,
 
+    /// Start a new import with an empty cache, for an instance that has no
+    /// imported actions yet. A run with an empty cache refuses without it
+    #[arg(long = "fresh", conflicts_with = "sync_from_halo")]
+    pub fresh: bool,
+
     /// Directory holding the files to import
     #[arg(
         long = "input-path",
@@ -54,6 +59,7 @@ mod tests {
             Cli {
                 only_parse: false,
                 sync_from_halo: false,
+                fresh: false,
                 input_path: "input".to_string(),
                 batch_size: 1,
             }
@@ -105,6 +111,12 @@ mod tests {
     fn an_unknown_flag_is_rejected_instead_of_ignored() {
         assert!(parse(&["--only-parse-input"]).is_err());
         assert!(parse(&["extra"]).is_err());
+    }
+
+    #[test]
+    fn fresh_parses_and_cannot_be_combined_with_a_sync() {
+        assert!(parse(&["--fresh"]).unwrap().fresh);
+        assert!(parse(&["--fresh", "--sync-from-halo"]).is_err());
     }
 
     #[test]

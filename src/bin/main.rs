@@ -17,6 +17,7 @@ async fn main() -> anyhow::Result<ExitCode> {
     let Cli {
         only_parse,
         sync_from_halo,
+        fresh,
         input_path,
         batch_size,
     } = Cli::parse();
@@ -38,6 +39,7 @@ async fn main() -> anyhow::Result<ExitCode> {
         SetupOptions {
             only_parse,
             sync_from_halo,
+            fresh,
         },
         &cache,
         input_path,

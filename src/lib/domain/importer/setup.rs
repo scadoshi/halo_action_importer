@@ -261,12 +261,13 @@ fn write_atomically(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The two command line switches setup reads: parse without posting, and
-/// fetch the reports into the cache first. Both can be on.
+/// The command line switches setup reads: parse without posting, fetch the
+/// reports into the cache first, and start a new import from an empty cache.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SetupOptions {
     pub only_parse: bool,
     pub sync_from_halo: bool,
+    pub fresh: bool,
 }
 
 pub struct SetupResult {
@@ -338,6 +339,13 @@ pub async fn setup_auth_and_existing_ids(
         format_number(cache_data.action_ids.len()),
         cache_data.fetched_resources.len()
     );
+    let refuses_empty = !(options.sync_from_halo || options.fresh || options.only_parse);
+    if refuses_empty && cache_data.action_ids.is_empty() {
+        anyhow::bail!(
+            "The cache directory {} holds no action IDs, so every action in the files would be posted. Run with --sync-from-halo to fetch the IDs Halo already has, or with --fresh if this instance has no imported actions yet",
+            cache.dir.display()
+        );
+    }
 
     let auth_client = Arc::new(AuthClient::new(config.clone())?);
     let _token = auth_client
@@ -351,11 +359,6 @@ pub async fn setup_auth_and_existing_ids(
             "Using {} cached IDs; run with --sync-from-halo to fetch the reports",
             format_number(cache_data.action_ids.len())
         );
-        if cache_data.action_ids.is_empty() {
-            warn!(
-                "The cache is empty, so every action in the files will be posted. If this Halo instance already has imported actions, stop and rerun with --sync-from-halo"
-            );
-        }
         if options.only_parse {
             return Ok((None, cache_data.action_ids));
         }
@@ -608,6 +611,42 @@ mod tests {
                 "GET /api/ReportData/aaa HTTP/1.1"
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn a_default_run_with_an_empty_cache_refuses_before_asking_halo_anything() {
+        let server = TestServer::start(vec![TOKEN]).await;
+        let dir = scratch_dir("setup_empty_refused");
+
+        let result = setup_auth_and_existing_ids(
+            &config(server.base_url()),
+            SetupOptions::default(),
+            &Cache::new(&dir),
+        )
+        .await;
+
+        std::fs::remove_dir_all(&dir).unwrap();
+        let message = format!("{:#}", result.err().unwrap());
+        assert!(message.contains("--sync-from-halo"), "{message}");
+        assert!(message.contains("--fresh"), "{message}");
+        assert!(server.requests().is_empty(), "{:?}", server.requests());
+    }
+
+    #[tokio::test]
+    async fn a_fresh_run_starts_from_an_empty_cache() {
+        let server = TestServer::start(vec![TOKEN]).await;
+        let dir = scratch_dir("setup_fresh");
+        let options = SetupOptions {
+            fresh: true,
+            ..SetupOptions::default()
+        };
+
+        let result =
+            setup_auth_and_existing_ids(&config(server.base_url()), options, &Cache::new(&dir))
+                .await;
+
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(result.unwrap().1.is_empty());
     }
 
     #[test]
