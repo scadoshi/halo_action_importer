@@ -4,8 +4,8 @@ declare @num_groups int = 10;
 
 with stats as (
     select 
-        min(convert(int, cfactionid)) [min_id],
-        max(convert(int, cfactionid)) [max_id],
+        min(convert(bigint, cfactionid)) [min_id],
+        max(convert(bigint, cfactionid)) [max_id],
         count(cfactionid) [total]
     from actions
     where cfactionid is not null
