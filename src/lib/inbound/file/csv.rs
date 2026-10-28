@@ -4,7 +4,7 @@ use anyhow::Context;
 use csv::ReaderBuilder;
 
 use crate::domain::models::action_object::ActionObject;
-use crate::inbound::file::Reader;
+use crate::inbound::file::{Reader, RowError};
 
 pub trait Csv {
     fn try_csv_to_action_objects(path: &Path) -> anyhow::Result<Vec<ActionObject>>;
@@ -15,29 +15,29 @@ pub struct CsvActionIterator {
     rdr: csv::DeserializeRecordsIntoIter<std::fs::File, ActionObject>,
     file_name: String,
     row_num: usize,
-    total_rows: Option<usize>,
+    total_rows: usize,
 }
 
 impl CsvActionIterator {
-    pub fn total_rows(&self) -> Option<usize> {
+    /// How many data rows the file has, good or bad.
+    pub fn total_rows(&self) -> usize {
         self.total_rows
     }
 }
 
 impl Iterator for CsvActionIterator {
-    type Item = anyhow::Result<ActionObject>;
+    type Item = Result<ActionObject, RowError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let result = self.rdr.next()?;
         // Every record counts, good or bad, so the numbers match the file's data rows.
         self.row_num += 1;
-        Some(result.map_err(|e| {
-            anyhow::anyhow!(
+        Some(result.map_err(|e| RowError {
+            row: self.row_num,
+            message: format!(
                 "failed to deserialize row {} in csv file: {}: {}",
-                self.row_num,
-                self.file_name,
-                e
-            )
+                self.row_num, self.file_name, e
+            ),
         }))
     }
 }
@@ -67,7 +67,7 @@ impl Csv for Reader {
             while records.next().is_some() {
                 count += 1;
             }
-            Some(count)
+            count
         };
         let file = std::fs::File::open(path)
             .with_context(|| format!("failed to open csv file: {}", file_name))?;
@@ -101,7 +101,7 @@ mod tests {
              11,501,who,again,\n",
         );
         let iter = Reader::csv_action_iter(&path).unwrap();
-        assert_eq!(iter.total_rows(), Some(2));
+        assert_eq!(iter.total_rows(), 2);
         let actions: Vec<ActionObject> = iter.map(Result::unwrap).collect();
         std::fs::remove_file(&path).unwrap();
 

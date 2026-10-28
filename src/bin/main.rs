@@ -1,4 +1,3 @@
-use std::ffi::OsStr;
 use std::process::ExitCode;
 use std::time::Instant;
 
@@ -8,10 +7,10 @@ use halo_action_importer::cli::Cli;
 use halo_action_importer::config::Config;
 use halo_action_importer::domain::importer::format::format_number;
 use halo_action_importer::domain::importer::{
-    Cache, FailedAction, ImportSummary, SetupOptions, SetupResult, exit_code, log_summary,
-    process_csv_file, process_excel_file, setup, write_retry_csv, write_summary_json,
+    Cache, ImportSummary, ProcessConfig, Run, SetupOptions, SetupResult, exit_code, log_summary,
+    setup, write_retry_csv, write_summary_json,
 };
-use tracing::{error, info};
+use tracing::info;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<ExitCode> {
@@ -30,7 +29,7 @@ async fn main() -> anyhow::Result<ExitCode> {
     let cache = Cache::default();
 
     let SetupResult {
-        mut existing_ids,
+        existing_ids,
         action_client,
         files_to_process,
         auth_client: _,
@@ -61,92 +60,38 @@ async fn main() -> anyhow::Result<ExitCode> {
     } else {
         info!("Starting import of {} file(s)", format_number(total_sheets));
     }
-    let mut total_actions_processed = 0;
-    let mut total_actions_imported = 0;
-    let mut total_actions_skipped = 0;
-    let mut skipped_files: Vec<String> = Vec::new();
-    let mut failed_imports: Vec<FailedAction> = Vec::new();
-    let mut sheet_times: Vec<f64> = Vec::new();
     let start_time = Instant::now();
-
-    for (sheet_num, (file_path, file_name)) in files_to_process.iter().enumerate() {
-        let sheet_number = sheet_num + 1;
-        if let Some(ext) = file_path.extension().and_then(OsStr::to_str) {
-            let ext_lower = ext.to_lowercase();
-            let result = if ext_lower == "csv" {
-                process_csv_file(
-                    file_path,
-                    &mut existing_ids,
-                    action_client.as_ref(),
-                    &mut sheet_times,
-                    file_name,
-                    sheet_number,
-                    total_sheets,
-                    only_parse,
-                    batch_size,
-                    &cache,
-                )
-                .await
-            } else if ext_lower == "xlsx" || ext_lower == "xls" {
-                process_excel_file(
-                    file_path,
-                    &mut existing_ids,
-                    action_client.as_ref(),
-                    &mut sheet_times,
-                    sheet_number,
-                    total_sheets,
-                    only_parse,
-                    batch_size,
-                    &cache,
-                )
-                .await
-            } else {
-                continue;
-            };
-
-            match result {
-                Ok(stats) => {
-                    total_actions_processed += stats.processed;
-                    total_actions_imported += stats.imported;
-                    total_actions_skipped += stats.skipped;
-                    failed_imports.extend(stats.failed);
-                }
-                Err(e) => {
-                    error!("Failed to read file {:?}: {}", file_name, e);
-                    skipped_files.push(format!("{:?}: {}", file_name, e));
-                }
-            }
-        }
-    }
+    let run = Run::new(
+        ProcessConfig {
+            action_client: action_client.as_ref(),
+            cache: &cache,
+            only_parse,
+            batch_size,
+        },
+        existing_ids,
+        total_sheets,
+    );
+    let totals = run.process_files(&files_to_process).await;
 
     let total_runtime = start_time.elapsed().as_secs_f64();
     let summary = ImportSummary {
-        total_processed: total_actions_processed,
-        total_imported: total_actions_imported,
-        total_skipped: total_actions_skipped,
-        total_failed: failed_imports.len(),
-        skipped_files: skipped_files.clone(),
+        total_processed: totals.processed,
+        total_imported: totals.imported,
+        total_skipped: totals.skipped,
+        total_failed: totals.failed.len(),
+        skipped_files: totals.skipped_files.clone(),
         total_runtime_secs: total_runtime,
-        sheet_times: sheet_times.clone(),
+        sheet_times: totals.sheet_times.clone(),
     };
     let code = exit_code(&summary);
     log_summary(summary, only_parse);
 
     // Write retry.csv and summary.json
-    if !failed_imports.is_empty() {
-        write_retry_csv(&log_dir_path, &failed_imports)?;
+    if !totals.failed.is_empty() {
+        write_retry_csv(&log_dir_path, &totals.failed)?;
     }
 
-    write_summary_json(
-        &log_dir_path,
-        total_actions_processed,
-        total_actions_imported,
-        total_actions_skipped,
-        &failed_imports,
-        total_runtime,
-        &skipped_files,
-        total_sheets,
-    )?;
+    write_summary_json(&log_dir_path, &totals, total_runtime, total_sheets)?;
 
     Ok(ExitCode::from(code))
 }

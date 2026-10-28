@@ -5,7 +5,7 @@ use calamine::{Data, Reader as CalamineReader, open_workbook_auto};
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 
 use crate::domain::models::action_object::ActionObject;
-use crate::inbound::file::Reader;
+use crate::inbound::file::{Reader, RowError};
 
 fn excel_serial_to_datetime(serial: f64) -> Option<NaiveDateTime> {
     let excel_epoch = NaiveDate::from_ymd_opt(1899, 12, 30)?;
@@ -58,7 +58,7 @@ impl ExcelActionIterator {
 }
 
 impl Iterator for ExcelActionIterator {
-    type Item = anyhow::Result<ActionObject>;
+    type Item = Result<ActionObject, RowError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -72,7 +72,7 @@ impl Iterator for ExcelActionIterator {
 impl ExcelActionIterator {
     /// Reads the next row: `None` at the end of the sheet, `Some(None)` for a
     /// row with no data in it.
-    fn read_row(&mut self) -> Option<Option<anyhow::Result<ActionObject>>> {
+    fn read_row(&mut self) -> Option<Option<Result<ActionObject, RowError>>> {
         if self.row_num >= self.rows.len() {
             return None;
         }
@@ -268,14 +268,17 @@ impl ExcelActionIterator {
         }
         self.row_num += 1;
         if let Some(value) = bad_ticket_id {
-            return Some(Some(Err(anyhow::anyhow!(
-                "ticket id {} in row {} of worksheet '{}' of excel file '{}' is not a whole number from 0 to {}",
-                value,
-                row_num_for_error,
-                self.sheet_name,
-                self.file_name,
-                u32::MAX
-            ))));
+            return Some(Some(Err(RowError {
+                row: row_num_for_error,
+                message: format!(
+                    "ticket id {} in row {} of worksheet '{}' of excel file '{}' is not a whole number from 0 to {}",
+                    value,
+                    row_num_for_error,
+                    self.sheet_name,
+                    self.file_name,
+                    u32::MAX
+                ),
+            })));
         }
         if !has_any_data {
             return Some(None);
@@ -304,14 +307,13 @@ impl ExcelActionIterator {
                     available_fields.join(", "),
                     error_str
                 );
-                Some(Some(Err(anyhow::anyhow!(
-                    "failed to deserialize row {} in worksheet '{}' of excel file '{}': {} (data: {})",
-                    row_num_for_error,
-                    self.sheet_name,
-                    self.file_name,
-                    field_info,
-                    json_str
-                ))))
+                Some(Some(Err(RowError {
+                    row: row_num_for_error,
+                    message: format!(
+                        "failed to deserialize row {} in worksheet '{}' of excel file '{}': {} (data: {})",
+                        row_num_for_error, self.sheet_name, self.file_name, field_info, json_str
+                    ),
+                })))
             }
         }
     }
