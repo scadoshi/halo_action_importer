@@ -53,6 +53,18 @@ impl Iterator for ExcelActionIterator {
     type Item = anyhow::Result<ActionObject>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(item) = self.read_row()? {
+                return Some(item);
+            }
+        }
+    }
+}
+
+impl ExcelActionIterator {
+    /// Reads the next row: `None` at the end of the sheet, `Some(None)` for a
+    /// row with no data in it.
+    fn read_row(&mut self) -> Option<Option<anyhow::Result<ActionObject>>> {
         if self.row_num >= self.rows.len() {
             return None;
         }
@@ -248,17 +260,17 @@ impl Iterator for ExcelActionIterator {
         }
         self.row_num += 1;
         if let Some(value) = bad_ticket_id {
-            return Some(Err(anyhow::anyhow!(
+            return Some(Some(Err(anyhow::anyhow!(
                 "ticket id {} in row {} of worksheet '{}' of excel file '{}' is not a whole number from 0 to {}",
                 value,
                 row_num_for_error,
                 self.sheet_name,
                 self.file_name,
                 u32::MAX
-            )));
+            ))));
         }
         if !has_any_data {
-            return self.next();
+            return Some(None);
         }
         let json_value = serde_json::Value::Object(record.clone());
         let available_fields: Vec<String> = record.keys().cloned().collect();
@@ -273,7 +285,7 @@ impl Iterator for ExcelActionIterator {
                         tracing::warn!("Date value in JSON was: {:?}", date_val);
                     }
                 }
-                Some(Ok(action_object))
+                Some(Some(Ok(action_object)))
             }
             Err(e) => {
                 let json_str = serde_json::to_string(&json_value)
@@ -284,14 +296,14 @@ impl Iterator for ExcelActionIterator {
                     available_fields.join(", "),
                     error_str
                 );
-                Some(Err(anyhow::anyhow!(
+                Some(Some(Err(anyhow::anyhow!(
                     "failed to deserialize row {} in worksheet '{}' of excel file '{}': {} (data: {})",
                     row_num_for_error,
                     self.sheet_name,
                     self.file_name,
                     field_info,
                     json_str
-                )))
+                ))))
             }
         }
     }
@@ -426,5 +438,14 @@ mod tests {
         );
         assert_eq!(iter.next().unwrap().unwrap().ticket_id, 10);
         assert_eq!(iter.next().unwrap().unwrap().ticket_id, u32::MAX);
+    }
+
+    #[test]
+    fn a_long_run_of_blank_rows_is_skipped_without_exhausting_the_stack() {
+        let mut rows = vec![vec![Data::Empty; HEADERS.len()]; 200_000];
+        rows.push(row(Data::Int(7)));
+        let mut iter = sheet(HEADERS, rows);
+        assert_eq!(iter.next().unwrap().unwrap().ticket_id, 7);
+        assert!(iter.next().is_none());
     }
 }
