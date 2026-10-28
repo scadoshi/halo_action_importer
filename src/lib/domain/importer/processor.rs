@@ -684,6 +684,7 @@ pub async fn process_excel_file(
                         Ok(_) => {
                             let batch_count = batch.len();
                             imported += batch_count;
+                            batch_number += 1;
 
                             // Calculate timing stats
                             let batch_time = batch_start.elapsed().as_secs_f64();
@@ -1106,7 +1107,7 @@ pub fn write_summary_json(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     use super::*;
@@ -1786,5 +1787,64 @@ mod tests {
             })
         );
         assert_eq!(run.exit_code, 1);
+    }
+
+    /// Collects what the code under test logs on this thread, as plain text.
+    #[derive(Clone, Default)]
+    struct Logs(Arc<Mutex<Vec<u8>>>);
+
+    impl Logs {
+        /// Starts collecting; collection stops when the guard drops.
+        fn capture(&self) -> tracing::subscriber::DefaultGuard {
+            let logs = self.clone();
+            let subscriber = tracing_subscriber::fmt()
+                .with_ansi(false)
+                .without_time()
+                .with_writer(move || logs.clone())
+                .finish();
+            tracing::subscriber::set_default(subscriber)
+        }
+
+        fn text(&self) -> String {
+            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+        }
+    }
+
+    impl std::io::Write for Logs {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn batches_are_numbered_from_one_in_the_log_in_either_file_type() {
+        for file in both_files(FIVE_ROWS) {
+            let server = TestServer::start(vec![TOKEN, CREATED, CREATED, CREATED]).await;
+            let logs = Logs::default();
+            let guard = logs.capture();
+
+            run_files(
+                &server,
+                "batch_numbers",
+                std::slice::from_ref(&file),
+                2,
+                false,
+            )
+            .await;
+
+            drop(guard);
+            let text = logs.text();
+            let numbers: Vec<&str> = text
+                .lines()
+                .filter_map(|line| line.split("Imported batch ").nth(1))
+                .filter_map(|rest| rest.split(' ').next())
+                .collect();
+            assert_eq!(numbers, ["1/3", "2/3", "3/3"], "{}", file.0);
+        }
     }
 }
