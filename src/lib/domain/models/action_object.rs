@@ -151,7 +151,15 @@ where
     deserializer.deserialize_option(ActionDateVisitor)
 }
 
-impl Serialize for ActionObject {
+/// An action as the import endpoint takes it, with the action ID sent under
+/// the configured custom field name.
+#[derive(Debug, Clone, Copy)]
+pub struct ActionPayload<'a> {
+    action: &'a ActionObject,
+    custom_field: &'a str,
+}
+
+impl Serialize for ActionPayload<'_> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -159,10 +167,11 @@ impl Serialize for ActionObject {
         use serde::ser::SerializeMap;
         let mut map = serializer.serialize_map(None)?;
 
+        let action = self.action;
         map.serialize_entry("__rowNum__", &Option::<u32>::None)?;
-        map.serialize_entry("_isimport", &self._isimport)?;
+        map.serialize_entry("_isimport", &action._isimport)?;
 
-        if let Some(date) = &self.actiondate {
+        if let Some(date) = &action.actiondate {
             let arizona_offset = FixedOffset::west_opt(7 * 3600).unwrap();
             let arizona_dt = arizona_offset
                 .from_local_datetime(date)
@@ -173,24 +182,24 @@ impl Serialize for ActionObject {
             map.serialize_entry("datetime", &date_str)?;
         }
 
-        map.serialize_entry("actionwho", &self.actionwho)?;
+        map.serialize_entry("actionwho", &action.actionwho)?;
 
-        let cfactionid = self.action_id.value();
-        map.serialize_entry("cfactionid", &cfactionid)?;
+        let action_id = action.action_id.value();
+        map.serialize_entry(self.custom_field, &action_id)?;
 
         let customfields = vec![serde_json::json!({
-            "name": "cfactionid",
-            "value": cfactionid
+            "name": self.custom_field,
+            "value": action_id
         })];
         map.serialize_entry("customfields", &customfields)?;
 
-        map.serialize_entry("note", &self.note)?;
-        map.serialize_entry("note_html", &self.note)?;
-        map.serialize_entry("outcome", &self.outcome)?;
-        map.serialize_entry("requestid", &self.ticket_id)?;
+        map.serialize_entry("note", &action.note)?;
+        map.serialize_entry("note_html", &action.note)?;
+        map.serialize_entry("outcome", &action.outcome)?;
+        map.serialize_entry("requestid", &action.ticket_id)?;
         map.serialize_entry("result", &Option::<String>::None)?;
-        map.serialize_entry("ticket_id", &self.ticket_id)?;
-        map.serialize_entry("who", &self.actionwho)?;
+        map.serialize_entry("ticket_id", &action.ticket_id)?;
+        map.serialize_entry("who", &action.actionwho)?;
 
         map.end()
     }
@@ -220,6 +229,14 @@ impl ActionObject {
     pub fn action_id(&self) -> ActionId {
         self.action_id
     }
+
+    /// The action as the import endpoint takes it, with the ID under `custom_field`.
+    pub fn payload<'a>(&'a self, custom_field: &'a str) -> ActionPayload<'a> {
+        ActionPayload {
+            action: self,
+            custom_field,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -232,7 +249,8 @@ mod tests {
     fn serializes_to_the_shape_the_import_endpoint_takes() {
         let action_object =
             ActionObject::new(123, None, None, "testing..", "tester", ActionId::new(456));
-        let serialized: serde_json::Value = serde_json::to_value(&action_object).unwrap();
+        let serialized: serde_json::Value =
+            serde_json::to_value(action_object.payload("cfactionid")).unwrap();
         assert_eq!(
             serialized,
             serde_json::json!({
@@ -259,7 +277,8 @@ mod tests {
             .and_hms_opt(10, 0, 0)
             .unwrap();
         let action_object = ActionObject::new(1, Some(local), None, "n", "w", ActionId::new(1));
-        let serialized: serde_json::Value = serde_json::to_value(&action_object).unwrap();
+        let serialized: serde_json::Value =
+            serde_json::to_value(action_object.payload("cfactionid")).unwrap();
         assert_eq!(serialized["datetime"], "2026-01-15T17:00:00.000Z");
     }
 
@@ -273,5 +292,18 @@ mod tests {
         assert!(serde_json::from_value::<ActionObject>(row("abc")).is_err());
         assert!(serde_json::from_value::<ActionObject>(row("")).is_err());
         assert!(serde_json::from_value::<ActionObject>(row("12")).is_ok());
+    }
+
+    #[test]
+    fn the_action_id_goes_under_the_configured_custom_field() {
+        let action_object = ActionObject::new(1, None, None, "n", "w", ActionId::new(9));
+        let serialized: serde_json::Value =
+            serde_json::to_value(action_object.payload("cfimportid")).unwrap();
+        assert_eq!(serialized["cfimportid"], 9);
+        assert_eq!(serialized.get("cfactionid"), None);
+        assert_eq!(
+            serialized["customfields"],
+            serde_json::json!([{ "name": "cfimportid", "value": 9 }])
+        );
     }
 }

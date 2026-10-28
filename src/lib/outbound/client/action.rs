@@ -35,6 +35,10 @@ impl ActionClient {
             .iter()
             .map(|a| a.action_id().to_string())
             .collect();
+        let payload: Vec<_> = action_objects
+            .iter()
+            .map(|action| action.payload(&self.config.action_id_custom_field))
+            .collect();
         let mut endpoint = self.config.base_resource_url.clone();
         endpoint.set_path("api/actions");
         let mut auth_token = self
@@ -49,7 +53,7 @@ impl ActionClient {
                 .post(endpoint.clone())
                 .header("Authorization", &auth_token)
                 .header("Content-Type", "application/json; charset=utf-8")
-                .json(&action_objects);
+                .json(&payload);
 
             let response = match request.send().await {
                 Ok(resp) => resp,

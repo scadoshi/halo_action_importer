@@ -9,7 +9,8 @@ pub struct Config {
     pub client_id: String,
     pub client_secret: String,
     pub action_ids_resource_uuids: Vec<String>,
-    pub action_id_custom_field_id: u32,
+    /// The name of the action custom field that holds the action ID, such as `cfactionid`.
+    pub action_id_custom_field: String,
     pub log_level: Level,
 }
 
@@ -20,7 +21,7 @@ const CLIENT_SECRET_KEY: &str = "CLIENT_SECRET";
 const TOKEN_URL_PATH: &str = "auth/token";
 
 const ACTION_IDS_RESOURCE_PATH_KEY: &str = "ACTION_IDS_RESOURCE_PATHS";
-const ACTION_ID_CUSTOM_FIELD_ID_KEY: &str = "ACTION_ID_CUSTOM_FIELD_ID";
+const ACTION_ID_CUSTOM_FIELD_KEY: &str = "ACTION_ID_CUSTOM_FIELD";
 const LOG_LEVEL_KEY: &str = "LOG_LEVEL";
 
 impl Config {
@@ -53,14 +54,12 @@ impl Config {
             .map(|uuid| uuid.trim().to_string())
             .filter(|uuid| !uuid.is_empty())
             .collect();
-        let action_id_custom_field_id_str = var(ACTION_ID_CUSTOM_FIELD_ID_KEY)?;
-        let action_id_custom_field_id =
-            action_id_custom_field_id_str.parse().with_context(|| {
-                format!(
-                    "invalid integer format for {}: {}",
-                    ACTION_ID_CUSTOM_FIELD_ID_KEY, action_id_custom_field_id_str
-                )
-            })?;
+        let action_id_custom_field = var(ACTION_ID_CUSTOM_FIELD_KEY)?.trim().to_string();
+        if action_id_custom_field.is_empty() {
+            anyhow::bail!(
+                "{ACTION_ID_CUSTOM_FIELD_KEY} is blank: it must name the action ID custom field"
+            );
+        }
 
         let log_level_str = lookup(LOG_LEVEL_KEY).unwrap_or_else(|| "info".to_string());
         let log_level_str_trimmed = log_level_str.trim().to_lowercase();
@@ -85,7 +84,7 @@ impl Config {
             client_id,
             client_secret,
             action_ids_resource_uuids,
-            action_id_custom_field_id,
+            action_id_custom_field,
             log_level,
         })
     }
@@ -110,7 +109,7 @@ mod tests {
         ("CLIENT_ID", "id"),
         ("CLIENT_SECRET", "secret"),
         ("ACTION_IDS_RESOURCE_PATHS", " aaa, bbb,,ccc "),
-        ("ACTION_ID_CUSTOM_FIELD_ID", "42"),
+        ("ACTION_ID_CUSTOM_FIELD", " cfactionid "),
     ];
 
     #[test]
@@ -121,7 +120,7 @@ mod tests {
             "https://halo.example.com/auth/token"
         );
         assert_eq!(config.action_ids_resource_uuids, ["aaa", "bbb", "ccc"]);
-        assert_eq!(config.action_id_custom_field_id, 42);
+        assert_eq!(config.action_id_custom_field, "cfactionid");
         assert_eq!(config.log_level, Level::INFO);
     }
 
@@ -136,7 +135,7 @@ mod tests {
     }
 
     #[test]
-    fn a_bad_url_a_bad_field_id_and_a_bad_log_level_are_named() {
+    fn a_bad_url_a_blank_field_name_and_a_bad_log_level_are_named() {
         let with = |key: &str, value: &str| {
             let mut pairs: Vec<(&str, &str)> = COMPLETE
                 .iter()
@@ -147,9 +146,7 @@ mod tests {
             Config::from_lookup(vars(&pairs)).unwrap_err().to_string()
         };
         assert!(with("BASE_RESOURCE_URL", "not a url").contains("BASE_RESOURCE_URL"));
-        assert!(
-            with("ACTION_ID_CUSTOM_FIELD_ID", "forty-two").contains("ACTION_ID_CUSTOM_FIELD_ID")
-        );
+        assert!(with("ACTION_ID_CUSTOM_FIELD", "  ").contains("ACTION_ID_CUSTOM_FIELD"));
         assert!(with("LOG_LEVEL", "loud").contains("LOG_LEVEL"));
     }
 

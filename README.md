@@ -18,11 +18,11 @@ BASE_RESOURCE_URL = https://example.haloitsm.com/
 CLIENT_ID = client-id
 CLIENT_SECRET = client-secret
 ACTION_IDS_RESOURCE_PATHS = aa637f8f-0e94-48e4-8881-8e1ff08445ec,9a887d53-85fa-4928-a450-9aece690ade2
-ACTION_ID_CUSTOM_FIELD_ID = 123
+ACTION_ID_CUSTOM_FIELD = cfactionid
 LOG_LEVEL = info
 ```
 
-`BASE_RESOURCE_URL` keeps its trailing slash; the token URL is derived from it. `ACTION_IDS_RESOURCE_PATHS` is the report UUIDs, comma separated; the importer builds the URLs. `LOG_LEVEL` is one of trace, debug, info, warn, error and defaults to info. A missing or malformed value stops the run and names the variable.
+`BASE_RESOURCE_URL` keeps its trailing slash; the token URL is derived from it. `ACTION_IDS_RESOURCE_PATHS` is the report UUIDs, comma separated; the importer builds the URLs. `ACTION_ID_CUSTOM_FIELD` is the name of the action custom field that holds the ID, such as `cfactionid`; each action is posted with its ID under that name. `LOG_LEVEL` is one of trace, debug, info, warn, error and defaults to info. A missing or malformed value stops the run and names the variable.
 
 ## Running
 
