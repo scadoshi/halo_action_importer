@@ -333,6 +333,9 @@ pub async fn setup_auth_and_existing_ids(
     options: SetupOptions,
     cache: &Cache,
 ) -> anyhow::Result<(Option<Arc<AuthClient>>, HashSet<ActionId>)> {
+    if options.sync_from_halo {
+        config.report_uuids()?;
+    }
     let cache_data = cache.read()?;
     info!(
         "Cache: {} existing action IDs from {} resource(s)",
@@ -629,6 +632,27 @@ mod tests {
         let message = format!("{:#}", result.err().unwrap());
         assert!(message.contains("--sync-from-halo"), "{message}");
         assert!(message.contains("--fresh"), "{message}");
+        assert!(server.requests().is_empty(), "{:?}", server.requests());
+    }
+
+    #[tokio::test]
+    async fn a_sync_without_report_ids_refuses_before_asking_halo_anything() {
+        let server = TestServer::start(vec![TOKEN]).await;
+        let dir = scratch_dir("setup_sync_no_reports");
+        let config = Config {
+            action_ids_resource_uuids: Vec::new(),
+            ..config(server.base_url())
+        };
+        let options = SetupOptions {
+            sync_from_halo: true,
+            ..SetupOptions::default()
+        };
+
+        let result = setup_auth_and_existing_ids(&config, options, &Cache::new(&dir)).await;
+
+        std::fs::remove_dir_all(&dir).unwrap();
+        let message = format!("{:#}", result.err().unwrap());
+        assert!(message.contains("ACTION_IDS_RESOURCE_PATHS"), "{message}");
         assert!(server.requests().is_empty(), "{:?}", server.requests());
     }
 

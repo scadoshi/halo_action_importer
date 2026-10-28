@@ -22,7 +22,7 @@ ACTION_ID_CUSTOM_FIELD = cfactionid
 LOG_LEVEL = info
 ```
 
-`BASE_RESOURCE_URL` keeps its trailing slash; the token URL is derived from it. `ACTION_IDS_RESOURCE_PATHS` is the report UUIDs that `--sync-from-halo` reads, comma separated; the importer builds the URLs. `ACTION_ID_CUSTOM_FIELD` is the name of the action custom field that holds the ID, such as `cfactionid`; each action is posted with its ID under that name. `LOG_LEVEL` is one of trace, debug, info, warn, error and defaults to info. A missing or malformed value stops the run and names the variable.
+`BASE_RESOURCE_URL` keeps its trailing slash; the token URL is derived from it. `ACTION_IDS_RESOURCE_PATHS` is the report UUIDs that `--sync-from-halo` reads, comma separated; the importer builds the URLs, and only a sync needs it. `ACTION_ID_CUSTOM_FIELD` is the name of the action custom field that holds the ID, such as `cfactionid`; each action is posted with its ID under that name. `LOG_LEVEL` is one of trace, debug, info, warn, error and defaults to info. A missing or malformed value stops the run and names the variable.
 
 ## Running
 

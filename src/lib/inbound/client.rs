@@ -74,7 +74,7 @@ impl ReportClient {
         cache: &Cache,
     ) -> anyhow::Result<HashSet<ActionId>> {
         let mut all_existing_ids = HashSet::new();
-        let to_fetch = &self.config.action_ids_resource_uuids;
+        let to_fetch = self.config.report_uuids()?;
         info!("Fetching {} report resource(s)", to_fetch.len());
 
         for (idx, uuid) in to_fetch.iter().enumerate() {

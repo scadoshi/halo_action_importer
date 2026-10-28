@@ -39,6 +39,20 @@ const ACTION_ID_CUSTOM_FIELD_KEY: &str = "ACTION_ID_CUSTOM_FIELD";
 const LOG_LEVEL_KEY: &str = "LOG_LEVEL";
 
 impl Config {
+    /// The report UUIDs `--sync-from-halo` fetches.
+    ///
+    /// # Errors
+    ///
+    /// When none are configured.
+    pub fn report_uuids(&self) -> anyhow::Result<&[String]> {
+        if self.action_ids_resource_uuids.is_empty() {
+            anyhow::bail!(
+                "{ACTION_IDS_RESOURCE_PATH_KEY} must list at least one report UUID to run with --sync-from-halo"
+            );
+        }
+        Ok(&self.action_ids_resource_uuids)
+    }
+
     /// Reads `.env` when present, then the process environment.
     pub fn from_env() -> anyhow::Result<Self> {
         dotenvy::dotenv().ok();
@@ -62,7 +76,7 @@ impl Config {
         token_url.set_path(TOKEN_URL_PATH);
         let client_id = var(CLIENT_ID_KEY)?;
         let client_secret = var(CLIENT_SECRET_KEY)?;
-        let action_ids_uuids_str = var(ACTION_IDS_RESOURCE_PATH_KEY)?;
+        let action_ids_uuids_str = lookup(ACTION_IDS_RESOURCE_PATH_KEY).unwrap_or_default();
         let action_ids_resource_uuids: Vec<String> = action_ids_uuids_str
             .split(',')
             .map(|uuid| uuid.trim().to_string())
@@ -139,8 +153,27 @@ mod tests {
     }
 
     #[test]
+    fn the_report_ids_are_optional_until_a_sync_asks_for_them() {
+        let without: Vec<(&str, &str)> = COMPLETE
+            .iter()
+            .copied()
+            .filter(|(k, _)| *k != "ACTION_IDS_RESOURCE_PATHS")
+            .collect();
+        let config = Config::from_lookup(vars(&without)).unwrap();
+        let message = config.report_uuids().unwrap_err().to_string();
+        assert!(message.contains("ACTION_IDS_RESOURCE_PATHS"), "{message}");
+        assert!(message.contains("--sync-from-halo"), "{message}");
+
+        let config = Config::from_lookup(vars(COMPLETE)).unwrap();
+        assert_eq!(config.report_uuids().unwrap(), ["aaa", "bbb", "ccc"]);
+    }
+
+    #[test]
     fn a_missing_variable_is_named() {
-        for (key, _) in COMPLETE {
+        for (key, _) in COMPLETE
+            .iter()
+            .filter(|(k, _)| *k != "ACTION_IDS_RESOURCE_PATHS")
+        {
             let without: Vec<(&str, &str)> =
                 COMPLETE.iter().copied().filter(|(k, _)| k != key).collect();
             let message = Config::from_lookup(vars(&without)).unwrap_err().to_string();
