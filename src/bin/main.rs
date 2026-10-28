@@ -89,8 +89,8 @@ async fn main() -> anyhow::Result<ExitCode> {
     log_summary(summary, only_parse);
 
     // Write retry.csv, unparsed.csv and summary.json
-    if !totals.failed.is_empty() {
-        write_retry_csv(&log_dir_path, &totals.failed)?;
+    if totals.retry_actions().next().is_some() {
+        write_retry_csv(&log_dir_path, totals.retry_actions())?;
     }
     if !totals.unparsed.is_empty() {
         write_unparsed_csv(&log_dir_path, &totals.unparsed)?;

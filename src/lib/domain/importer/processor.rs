@@ -15,7 +15,7 @@ use crate::domain::models::action_object::{ActionId, ActionObject};
 use crate::inbound::file::csv::Csv;
 use crate::inbound::file::excel::Excel;
 use crate::inbound::file::{Reader, RowError};
-use crate::outbound::client::action::{ActionClient, PostError};
+use crate::outbound::client::action::{ActionClient, PostError, TICKET_NOT_FOUND};
 
 pub struct FailedAction {
     pub action: ActionObject,
@@ -27,8 +27,8 @@ pub struct ProcessingStats {
     pub imported: usize,
     pub skipped: usize,
     /// The skips that were for a ticket Halo answered 404 for; the rest were
-    /// ids already in Halo.
-    pub skipped_missing_ticket: usize,
+    /// ids already in Halo. They go to retry.csv but do not count as failed.
+    pub skipped_missing_ticket: Vec<FailedAction>,
     pub failed: Vec<FailedAction>,
     /// Rows that did not read as actions.
     pub unparsed: Vec<RowError>,
@@ -92,7 +92,7 @@ async fn retry_by_ticket_groups(
                 for action in actions {
                     result.failed_actions.push(FailedAction {
                         action,
-                        error_type: "Ticket not found".to_string(),
+                        error_type: TICKET_NOT_FOUND.to_string(),
                     });
                 }
             }
@@ -243,8 +243,8 @@ pub struct RunTotals {
     pub imported: usize,
     pub skipped: usize,
     /// The skips that were for a ticket Halo answered 404 for; the rest were
-    /// ids already in Halo.
-    pub skipped_missing_ticket: usize,
+    /// ids already in Halo. They go to retry.csv but do not count as failed.
+    pub skipped_missing_ticket: Vec<FailedAction>,
     pub failed: Vec<FailedAction>,
     /// Rows that did not read as actions. Each counts as processed and failed.
     pub unparsed: Vec<UnparsedRow>,
@@ -261,6 +261,12 @@ impl RunTotals {
     pub fn total_failed(&self) -> usize {
         self.failed.len() + self.unparsed.len()
     }
+
+    /// The actions retry.csv lists: those that failed, then those skipped for
+    /// a missing ticket.
+    pub fn retry_actions(&self) -> impl Iterator<Item = &FailedAction> {
+        self.failed.iter().chain(&self.skipped_missing_ticket)
+    }
 }
 
 /// One run over a list of files. It carries what each file leaves for the
@@ -270,6 +276,9 @@ pub struct Run<'a> {
     config: ProcessConfig<'a>,
     /// Ids already in Halo, from the cache plus every id this run has posted.
     existing_ids: HashSet<ActionId>,
+    /// Tickets Halo answered 404 for; their later actions, in any file, are
+    /// skipped.
+    missing_tickets: HashSet<u32>,
     sheet_times: Vec<f64>,
     total_sheets: usize,
 }
@@ -280,11 +289,9 @@ struct Sheet {
     processed: usize,
     imported: usize,
     skipped: usize,
-    skipped_missing_ticket: usize,
+    skipped_missing_ticket: Vec<FailedAction>,
     failed: Vec<FailedAction>,
     unparsed: Vec<RowError>,
-    /// Tickets Halo answered 404 for; their later actions are skipped.
-    missing_tickets: HashSet<u32>,
     /// Seconds per action of each post, for the ETA.
     row_times: Vec<f64>,
     /// Skips not yet logged.
@@ -317,6 +324,7 @@ impl<'a> Run<'a> {
         Self {
             config,
             existing_ids,
+            missing_tickets: HashSet::new(),
             sheet_times: Vec::new(),
             total_sheets,
         }
@@ -329,7 +337,7 @@ impl<'a> Run<'a> {
             processed: 0,
             imported: 0,
             skipped: 0,
-            skipped_missing_ticket: 0,
+            skipped_missing_ticket: Vec::new(),
             failed: Vec::new(),
             unparsed: Vec::new(),
             files_read: 0,
@@ -342,7 +350,9 @@ impl<'a> Run<'a> {
                     totals.processed += stats.processed;
                     totals.imported += stats.imported;
                     totals.skipped += stats.skipped;
-                    totals.skipped_missing_ticket += stats.skipped_missing_ticket;
+                    totals
+                        .skipped_missing_ticket
+                        .extend(stats.skipped_missing_ticket);
                     totals.failed.extend(stats.failed);
                     totals
                         .unparsed
@@ -414,10 +424,9 @@ impl<'a> Run<'a> {
             processed: 0,
             imported: 0,
             skipped: 0,
-            skipped_missing_ticket: 0,
+            skipped_missing_ticket: Vec::new(),
             failed: Vec::new(),
             unparsed: Vec::new(),
-            missing_tickets: HashSet::new(),
             row_times: Vec::new(),
             pending_skips: 0,
             batch: Vec::new(),
@@ -460,10 +469,13 @@ impl<'a> Run<'a> {
             {
                 sheet.skipped += 1;
                 sheet.pending_skips += 1;
-            } else if sheet.missing_tickets.contains(&action.ticket_id) {
+            } else if self.missing_tickets.contains(&action.ticket_id) {
                 sheet.skipped += 1;
-                sheet.skipped_missing_ticket += 1;
                 sheet.pending_skips += 1;
+                sheet.skipped_missing_ticket.push(FailedAction {
+                    action,
+                    error_type: TICKET_NOT_FOUND.to_string(),
+                });
             } else {
                 sheet.batch.push(action);
                 if sheet.batch.len() >= self.config.batch_size {
@@ -573,7 +585,7 @@ impl<'a> Run<'a> {
             }
             Err(e) => {
                 let outcome =
-                    settle_failed_batch(client, &batch, e, &mut sheet.missing_tickets, label).await;
+                    settle_failed_batch(client, &batch, e, &mut self.missing_tickets, label).await;
                 if outcome.regrouped {
                     sheet.batch_number += 1;
                 }
@@ -594,7 +606,10 @@ impl<'a> Run<'a> {
     }
 }
 
-pub fn write_retry_csv(log_dir: &str, failed: &[FailedAction]) -> anyhow::Result<()> {
+pub fn write_retry_csv<'a>(
+    log_dir: &str,
+    failed: impl IntoIterator<Item = &'a FailedAction>,
+) -> anyhow::Result<()> {
     let csv_path = format!("{}/retry.csv", log_dir);
     let file = File::create(&csv_path)?;
     let mut writer = Writer::from_writer(file);
@@ -610,8 +625,9 @@ pub fn write_retry_csv(log_dir: &str, failed: &[FailedAction]) -> anyhow::Result
         "error_type",
     ])?;
 
-    // Write each failed action
+    let mut written = 0usize;
     for failed_action in failed {
+        written += 1;
         let action = &failed_action.action;
 
         // Format date for CSV (keep in Arizona time as input expects)
@@ -632,7 +648,7 @@ pub fn write_retry_csv(log_dir: &str, failed: &[FailedAction]) -> anyhow::Result
     }
 
     writer.flush()?;
-    info!("Wrote {} failed actions to {}", failed.len(), csv_path);
+    info!("Wrote {} failed actions to {}", written, csv_path);
     Ok(())
 }
 
@@ -786,8 +802,8 @@ pub fn write_summary_json(
         total_skipped,
         total_failed: totals.total_failed(),
         skipped_breakdown: SkippedBreakdown {
-            already_exists: total_skipped.saturating_sub(*skipped_missing_ticket),
-            missing_ticket: *skipped_missing_ticket,
+            already_exists: total_skipped.saturating_sub(skipped_missing_ticket.len()),
+            missing_ticket: skipped_missing_ticket.len(),
         },
         performance: Performance {
             rows_per_second,
@@ -1161,8 +1177,8 @@ mod tests {
             total_runtime_secs: 1.0,
             sheet_times: totals.sheet_times.clone(),
         });
-        if !totals.failed.is_empty() {
-            write_retry_csv(log_dir_str, &totals.failed).unwrap();
+        if totals.retry_actions().next().is_some() {
+            write_retry_csv(log_dir_str, totals.retry_actions()).unwrap();
         }
         if !totals.unparsed.is_empty() {
             write_unparsed_csv(log_dir_str, &totals.unparsed).unwrap();
@@ -1347,15 +1363,43 @@ mod tests {
                 file.0
             );
             assert!(
-                run.retry_csv
-                    .as_deref()
-                    .unwrap()
-                    .ends_with("2,20,,w,n,Imported Note,Ticket not found\n"),
+                run.retry_csv.as_deref().unwrap().ends_with(
+                    "2,20,,w,n,Imported Note,Ticket not found\n\
+                     2,21,,w,n,Imported Note,Ticket not found\n"
+                ),
                 "{}: {:?}",
                 file.0,
                 run.retry_csv
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_missing_ticket_skips_its_actions_in_later_files_and_they_go_to_the_retry_csv() {
+        let server = TestServer::start(vec![TOKEN, Reply::Json(404, "{}"), CREATED]).await;
+
+        let run = run_files(
+            &server,
+            "missing_across_files",
+            &[
+                ("a.csv", csv_file(&[(2, 20)])),
+                ("b.csv", csv_file(&[(2, 21), (3, 30)])),
+            ],
+            1,
+            false,
+        )
+        .await;
+
+        assert_eq!(posted_ids(&run.requests), [vec![20], vec![30]]);
+        assert_eq!((run.imported, run.skipped, run.failed), (1, 1, 1));
+        assert_eq!(
+            run.retry_csv.as_deref(),
+            Some(
+                "ticket_id,action_id,actiondate,actionwho,note,outcome,error_type\n\
+                 2,20,,w,n,Imported Note,Ticket not found\n\
+                 2,21,,w,n,Imported Note,Ticket not found\n"
+            )
+        );
     }
 
     #[tokio::test]

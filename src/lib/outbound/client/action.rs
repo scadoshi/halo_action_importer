@@ -110,6 +110,9 @@ impl ActionClient {
     }
 }
 
+/// The error type of an action whose ticket Halo answered 404 for.
+pub const TICKET_NOT_FOUND: &str = "Ticket not found";
+
 /// Why Halo did not take a batch of actions.
 #[derive(Debug)]
 pub enum PostError {
@@ -137,7 +140,7 @@ impl PostError {
     /// The error type `retry.csv` and `summary.json` show for the failed actions.
     pub fn error_type(&self) -> &'static str {
         match self {
-            Self::TicketNotFound { .. } => "Ticket not found",
+            Self::TicketNotFound { .. } => TICKET_NOT_FOUND,
             Self::Rejected { status, .. } => match *status {
                 StatusCode::BAD_REQUEST => "Validation error",
                 StatusCode::UNAUTHORIZED => "Authentication error",
