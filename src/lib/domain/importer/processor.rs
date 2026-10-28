@@ -1110,8 +1110,10 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::domain::importer::summary::{ImportSummary, exit_code};
     use crate::outbound::client::auth::AuthClient;
-    use crate::test_server::{Reply, TOKEN, TestServer, config, lines, scratch_dir};
+    use crate::test_server::{Reply, Request, TOKEN, TestServer, config, lines, scratch_dir};
+    use crate::test_xlsx::{Cell, xlsx};
 
     /// Imports each `(name, csv)` file in turn, batch by batch, against
     /// `server`, with a scratch cache, and returns each file's stats.
@@ -1399,5 +1401,390 @@ mod tests {
             "ticket_id,action_id,actiondate,actionwho,note,outcome,error_type\n\
              7,99,2026-01-15 10:00:00,who,\"a, note\",Imported Note,Server error\n"
         );
+    }
+
+    /// What a run over some files left behind, as `main` writes it.
+    struct RunOutput {
+        requests: Vec<Request>,
+        processed: usize,
+        imported: usize,
+        skipped: usize,
+        failed: usize,
+        exit_code: u8,
+        retry_csv: Option<String>,
+        /// summary.json without its timing fields, which change run to run.
+        summary: serde_json::Value,
+    }
+
+    /// Runs `files` through the importer the way `main` does, against
+    /// `server`, writing retry.csv and summary.json to a scratch log directory.
+    async fn run_files(
+        server: &TestServer,
+        name: &str,
+        files: &[(&str, Vec<u8>)],
+        batch_size: usize,
+        only_parse: bool,
+    ) -> RunOutput {
+        let dir = scratch_dir(name);
+        let log_dir = dir.join("log");
+        std::fs::create_dir_all(&log_dir).unwrap();
+        let log_dir_str = log_dir.to_str().unwrap();
+        let cache = Cache::new(dir.join("cache"));
+        let config = config(server.base_url());
+        let client = (!only_parse).then(|| {
+            let auth_client = Arc::new(AuthClient::new(config.clone()).unwrap());
+            ActionClient::new(config, auth_client).unwrap()
+        });
+        let mut existing_ids = HashSet::new();
+        let mut sheet_times = Vec::new();
+        let (mut processed, mut imported, mut skipped) = (0, 0, 0);
+        let mut failed: Vec<FailedAction> = Vec::new();
+        let mut skipped_files: Vec<String> = Vec::new();
+        let total_sheets = files.len();
+        for (number, (file_name, bytes)) in files.iter().enumerate() {
+            let path = dir.join(file_name);
+            std::fs::write(&path, bytes).unwrap();
+            let run = async {
+                if file_name.ends_with(".csv") {
+                    process_csv_file(
+                        &path,
+                        &mut existing_ids,
+                        client.as_ref(),
+                        &mut sheet_times,
+                        file_name,
+                        number + 1,
+                        total_sheets,
+                        only_parse,
+                        batch_size,
+                        &cache,
+                    )
+                    .await
+                } else {
+                    process_excel_file(
+                        &path,
+                        &mut existing_ids,
+                        client.as_ref(),
+                        &mut sheet_times,
+                        number + 1,
+                        total_sheets,
+                        only_parse,
+                        batch_size,
+                        &cache,
+                    )
+                    .await
+                }
+            };
+            match tokio::time::timeout(HUNG, run)
+                .await
+                .expect("the import hung")
+            {
+                Ok(stats) => {
+                    processed += stats.processed;
+                    imported += stats.imported;
+                    skipped += stats.skipped;
+                    failed.extend(stats.failed);
+                }
+                Err(e) => skipped_files.push(format!("{file_name:?}: {e}")),
+            }
+        }
+        let code = exit_code(&ImportSummary {
+            total_processed: processed,
+            total_imported: imported,
+            total_skipped: skipped,
+            total_failed: failed.len(),
+            skipped_files: skipped_files.clone(),
+            total_runtime_secs: 1.0,
+            sheet_times: sheet_times.clone(),
+        });
+        if !failed.is_empty() {
+            write_retry_csv(log_dir_str, &failed).unwrap();
+        }
+        write_summary_json(
+            log_dir_str,
+            processed,
+            imported,
+            skipped,
+            &failed,
+            1.0,
+            &skipped_files,
+            total_sheets,
+        )
+        .unwrap();
+        let retry_csv = std::fs::read_to_string(log_dir.join("retry.csv")).ok();
+        let mut summary: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(log_dir.join("summary.json")).unwrap())
+                .unwrap();
+        let fields = summary.as_object_mut().unwrap();
+        for timing in [
+            "timestamp",
+            "runtime_seconds",
+            "runtime_formatted",
+            "performance",
+        ] {
+            fields.remove(timing).unwrap();
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+        RunOutput {
+            requests: server.requests(),
+            processed,
+            imported,
+            skipped,
+            failed: failed.len(),
+            exit_code: code,
+            retry_csv,
+            summary,
+        }
+    }
+
+    /// The action ids each request posted, in order.
+    fn posted_ids(requests: &[Request]) -> Vec<Vec<u64>> {
+        requests
+            .iter()
+            .filter(|r| r.line == POST_ACTIONS)
+            .map(|r| {
+                let body: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+                body.as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|action| action["cfactionid"].as_u64().unwrap())
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// A CSV file of `(ticket, action)` rows.
+    fn csv_file(rows: &[(u32, u64)]) -> Vec<u8> {
+        let mut csv = HEADER.to_string();
+        for (ticket, action) in rows {
+            csv.push_str(&format!("{ticket},{action},w,n,\n"));
+        }
+        csv.into_bytes()
+    }
+
+    /// An Excel file of `(ticket, action)` rows, the ids in numeric cells.
+    fn excel_file(rows: &[(u32, u64)]) -> Vec<u8> {
+        let mut sheet = vec![vec![
+            Cell::Text("requestId"),
+            Cell::Text("actionId"),
+            Cell::Text("actionwho"),
+            Cell::Text("note"),
+            Cell::Text("actiondate"),
+        ]];
+        for (ticket, action) in rows {
+            sheet.push(vec![
+                Cell::Number(f64::from(*ticket)),
+                Cell::Number(*action as f64),
+                Cell::Text("w"),
+                Cell::Text("n"),
+                Cell::Empty,
+            ]);
+        }
+        xlsx(&sheet)
+    }
+
+    /// The same rows as a CSV file and as an Excel file.
+    fn both_files(rows: &[(u32, u64)]) -> [(&'static str, Vec<u8>); 2] {
+        [("a.csv", csv_file(rows)), ("a.xlsx", excel_file(rows))]
+    }
+
+    const FIVE_ROWS: &[(u32, u64)] = &[(1, 10), (1, 11), (2, 20), (2, 21), (3, 30)];
+
+    #[tokio::test]
+    async fn rows_post_in_batches_of_the_batch_size() {
+        for file in both_files(FIVE_ROWS) {
+            let server = TestServer::start(vec![TOKEN, CREATED, CREATED, CREATED]).await;
+
+            let run = run_files(
+                &server,
+                "pin_batches",
+                std::slice::from_ref(&file),
+                2,
+                false,
+            )
+            .await;
+
+            assert_eq!(
+                posted_ids(&run.requests),
+                [vec![10, 11], vec![20, 21], vec![30]],
+                "{}",
+                file.0
+            );
+            assert_eq!(
+                (run.processed, run.imported, run.skipped, run.failed),
+                (5, 5, 0, 0),
+                "{}",
+                file.0
+            );
+            assert_eq!(run.retry_csv, None, "{}", file.0);
+            assert_eq!(run.exit_code, 0, "{}", file.0);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_batch_goes_to_the_retry_csv_and_the_next_batch_still_posts() {
+        for file in both_files(FIVE_ROWS) {
+            let server =
+                TestServer::start(vec![TOKEN, CREATED, Reply::Json(500, "{}"), CREATED]).await;
+
+            let run = run_files(
+                &server,
+                "pin_retry_csv",
+                std::slice::from_ref(&file),
+                2,
+                false,
+            )
+            .await;
+
+            assert_eq!(
+                posted_ids(&run.requests),
+                [vec![10, 11], vec![20, 21], vec![30]],
+                "{}",
+                file.0
+            );
+            assert_eq!(
+                run.retry_csv.as_deref(),
+                Some(
+                    "ticket_id,action_id,actiondate,actionwho,note,outcome,error_type\n\
+                     2,20,,w,n,Imported Note,Server error\n\
+                     2,21,,w,n,Imported Note,Server error\n"
+                ),
+                "{}",
+                file.0
+            );
+            assert_eq!(
+                (run.imported, run.failed, run.exit_code),
+                (3, 2, 1),
+                "{}",
+                file.0
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_404_ticket_skips_its_later_actions_in_either_file_type() {
+        for file in both_files(FIVE_ROWS) {
+            let server = TestServer::start(vec![
+                TOKEN,
+                CREATED,
+                CREATED,
+                Reply::Json(404, "{}"),
+                CREATED,
+            ])
+            .await;
+
+            let run = run_files(&server, "pin_404", std::slice::from_ref(&file), 1, false).await;
+
+            assert_eq!(
+                posted_ids(&run.requests),
+                [vec![10], vec![11], vec![20], vec![30]],
+                "{}",
+                file.0
+            );
+            assert_eq!(
+                (run.imported, run.skipped, run.failed),
+                (3, 1, 1),
+                "{}",
+                file.0
+            );
+            assert!(
+                run.retry_csv
+                    .as_deref()
+                    .unwrap()
+                    .ends_with("2,20,,w,n,Imported Note,Ticket not found\n"),
+                "{}: {:?}",
+                file.0,
+                run.retry_csv
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn parse_only_posts_nothing_and_counts_repeats_as_skipped() {
+        let rows = &[(1, 10), (1, 11), (1, 10)];
+        for file in both_files(rows) {
+            let server = TestServer::start(Vec::new()).await;
+
+            let run = run_files(
+                &server,
+                "pin_parse_only",
+                std::slice::from_ref(&file),
+                2,
+                true,
+            )
+            .await;
+
+            assert!(run.requests.is_empty(), "{}: {:?}", file.0, run.requests);
+            assert_eq!(
+                (run.processed, run.imported, run.skipped, run.failed),
+                (3, 2, 1, 0),
+                "{}",
+                file.0
+            );
+            assert_eq!(run.exit_code, 0, "{}", file.0);
+        }
+    }
+
+    #[tokio::test]
+    async fn the_summary_json_counts_a_mixed_run() {
+        // Ticket 2 is missing, ticket 3's posts fail, 10 repeats, one row
+        // does not parse and the Excel file is not a workbook.
+        let csv = "ticket_id,actionId,actionwho,note,actiondate\n\
+                   1,10,w,n,\n\
+                   1,11,w,n,\n\
+                   1,10,w,n,\n\
+                   2,20,w,n,\n\
+                   2,21,w,n,\n\
+                   2,22,w,n,\n\
+                   3,30,w,n,\n\
+                   3,30,w,n,\n\
+                   nope,40,w,n,\n";
+        let server = TestServer::start(vec![
+            TOKEN,
+            CREATED,
+            CREATED,
+            Reply::Json(404, "{}"),
+            Reply::Json(500, "{}"),
+            Reply::Json(500, "{}"),
+        ])
+        .await;
+
+        let mut run = run_files(
+            &server,
+            "pin_summary",
+            &[
+                ("a.csv", csv.as_bytes().to_vec()),
+                ("broken.xlsx", b"not a workbook".to_vec()),
+            ],
+            1,
+            false,
+        )
+        .await;
+
+        assert_eq!(
+            posted_ids(&run.requests),
+            [vec![10], vec![11], vec![20], vec![30], vec![30]]
+        );
+        // The error summary comes out in no fixed order.
+        run.summary["error_summary"]
+            .as_array_mut()
+            .unwrap()
+            .sort_by_key(|entry| entry["error_type"].as_str().unwrap().to_string());
+        assert_eq!(
+            run.summary,
+            serde_json::json!({
+                "total_processed": 8,
+                "total_imported": 2,
+                "total_skipped": 3,
+                "total_failed": 3,
+                "skipped_breakdown": { "already_exists": 2, "missing_ticket": 1 },
+                "files_processed": 2,
+                "files_skipped": 1,
+                "error_summary": [
+                    { "error_type": "Server error", "count": 1, "affected_tickets": [3] },
+                    { "error_type": "Ticket not found", "count": 1, "affected_tickets": [2] },
+                ],
+            })
+        );
+        assert_eq!(run.exit_code, 1);
     }
 }

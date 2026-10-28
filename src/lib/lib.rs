@@ -6,3 +6,5 @@ pub mod outbound;
 
 #[cfg(test)]
 mod test_server;
+#[cfg(test)]
+mod test_xlsx;

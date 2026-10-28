@@ -23,6 +23,8 @@ tracing-subscriber = { version = "0.3.22", features = ["chrono"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["io-util", "net", "time"] }
+# Writes small .xlsx files for the Excel tests; calamine already pulls it in.
+zip = { version = "9", default-features = false }
 
 [lints.clippy]
 todo = "deny"
