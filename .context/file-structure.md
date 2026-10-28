@@ -100,7 +100,7 @@ pub mod outbound;
 **Public API**:
 - `Config` - Configuration management
 - `setup()` - Initialize application
-- `process_csv_file()`, `process_excel_file()` - File processors
+- `Run`, `ProcessConfig` - Import a list of files
 - `ActionClient`, `AuthClient`, `ReportClient` - API clients
 
 ---
@@ -154,8 +154,8 @@ pub mod outbound;
 
 **Key Functions**:
 - `setup()` - Initialize application
-- `process_csv_file()` - Process single CSV file
-- `process_excel_file()` - Process single Excel file
+- `Run::process_files()` - Import every file and total the results
+- `Run::process_file()` - Import one CSV or Excel file
 - `log_summary()` - Display final statistics
 
 #### domain/models
