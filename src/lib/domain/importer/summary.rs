@@ -58,7 +58,7 @@ pub fn log_summary(summary: ImportSummary, only_parse: bool) {
         );
     }
     if only_parse && summary.total_failed == 0 && summary.skipped_files.is_empty() {
-        let successful = summary.total_imported + summary.total_skipped;
+        let successful = summary.total_imported.saturating_add(summary.total_skipped);
         info!(
             "Success: {}/{} actions parsed successfully",
             format::format_number(successful),
@@ -67,17 +67,14 @@ pub fn log_summary(summary: ImportSummary, only_parse: bool) {
     }
     if summary.total_processed > 0 {
         let total_runtime = summary.total_runtime_secs;
-        let time_per_entry = total_runtime / summary.total_processed as f64;
+        let processed = format::count_to_f64(summary.total_processed);
+        let time_per_entry = total_runtime / processed;
         let entries_per_minute = if total_runtime > 0.0 {
-            (summary.total_processed as f64 / total_runtime) * 60.0
+            (processed / total_runtime) * 60.0
         } else {
             0.0
         };
-        let avg_sheet_time = if !summary.sheet_times.is_empty() {
-            summary.sheet_times.iter().sum::<f64>() / summary.sheet_times.len() as f64
-        } else {
-            0.0
-        };
+        let avg_sheet_time = format::mean(&summary.sheet_times);
         info!("=== Performance Stats ===");
         info!(
             "Total runtime: {:.2}s ({:.2}m)",
@@ -99,7 +96,7 @@ mod tests {
     fn summary(total_failed: usize, skipped_files: &[&str]) -> ImportSummary {
         ImportSummary {
             total_processed: 10,
-            total_imported: 10 - total_failed,
+            total_imported: 10_usize.saturating_sub(total_failed),
             total_skipped: 0,
             total_failed,
             skipped_files: skipped_files.iter().map(|f| (*f).to_string()).collect(),

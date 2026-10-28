@@ -55,7 +55,7 @@ pub fn parse_action_ids<'a>(ids: impl IntoIterator<Item = &'a str>, source: &str
         }
         match id.parse::<ActionId>() {
             Ok(id) => parsed.push(id),
-            Err(_) => rejected += 1,
+            Err(_) => rejected = rejected.saturating_add(1),
         }
     }
     if rejected > 0 {
@@ -124,7 +124,7 @@ impl Cache {
             .rfind('\n')
             .and_then(|end| imported.get(..end))
             .unwrap_or_default();
-        if complete.len() + 1 < imported.len() {
+        if imported.len().saturating_sub(complete.len()) > 1 {
             warn!("Ignored an unfinished last line in {}", txt_path.display());
         }
         action_ids.extend(parse_action_ids(
@@ -419,7 +419,7 @@ pub async fn setup_auth_and_existing_ids(
     let mut all_ids = cache_data.action_ids;
     let before_merge = all_ids.len();
     all_ids.extend(report_ids);
-    let new_from_reports = all_ids.len() - before_merge;
+    let new_from_reports = all_ids.len().saturating_sub(before_merge);
 
     info!(
         "Total {} existing action IDs to skip ({} new from reports)",

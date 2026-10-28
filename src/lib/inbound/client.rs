@@ -81,9 +81,9 @@ impl ReportClient {
         let to_fetch = self.config.report_uuids()?;
         info!("Fetching {} report resource(s)", to_fetch.len());
 
-        for (idx, uuid) in to_fetch.iter().enumerate() {
+        for (uuid, number) in to_fetch.iter().zip(1..) {
             let report_url = format!("{}api/ReportData/{}", self.config.base_resource_url, uuid);
-            info!("Fetching report {}/{}: {}", idx + 1, to_fetch.len(), uuid);
+            info!("Fetching report {}/{}: {}", number, to_fetch.len(), uuid);
 
             let report_data = self.fetch_report(&report_url, uuid).await?;
 
@@ -104,7 +104,7 @@ impl ReportClient {
 
             info!(
                 "Report {}/{} complete: {} IDs from {}, {} total new IDs",
-                idx + 1,
+                number,
                 to_fetch.len(),
                 format::format_number(report_ids.len()),
                 uuid,
@@ -173,7 +173,7 @@ impl ReportClient {
                 self.retry_backoff.as_secs()
             );
             tokio::time::sleep(self.retry_backoff).await;
-            attempt += 1;
+            attempt = attempt.saturating_add(1);
             auth_token = self
                 .auth_client
                 .fetch_token()

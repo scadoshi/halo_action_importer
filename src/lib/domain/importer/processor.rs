@@ -269,7 +269,7 @@ pub struct RunTotals {
 impl RunTotals {
     /// Actions that failed to import plus rows that did not parse.
     pub fn total_failed(&self) -> usize {
-        self.failed.len() + self.unparsed.len()
+        self.failed.len().saturating_add(self.unparsed.len())
     }
 
     /// The actions retry.csv lists: those that failed, then those skipped for
@@ -312,6 +312,12 @@ struct Sheet {
 }
 
 impl Sheet {
+    /// Counts an action that is not posted.
+    fn count_skip(&mut self) {
+        self.skipped = self.skipped.saturating_add(1);
+        self.pending_skips = self.pending_skips.saturating_add(1);
+    }
+
     /// Logs the skips counted since the last time, if any.
     fn log_pending_skips(&mut self) {
         if self.pending_skips > 0 {
@@ -354,12 +360,12 @@ impl<'a> Run<'a> {
             skipped_files: Vec::new(),
             sheet_times: Vec::new(),
         };
-        for (index, (path, file_name)) in files.iter().enumerate() {
-            match self.process_file(path, file_name, index + 1).await {
+        for ((path, file_name), sheet_number) in files.iter().zip(1..) {
+            match self.process_file(path, file_name, sheet_number).await {
                 Ok(stats) => {
-                    totals.processed += stats.processed;
-                    totals.imported += stats.imported;
-                    totals.skipped += stats.skipped;
+                    totals.processed = totals.processed.saturating_add(stats.processed);
+                    totals.imported = totals.imported.saturating_add(stats.imported);
+                    totals.skipped = totals.skipped.saturating_add(stats.skipped);
                     totals
                         .skipped_missing_ticket
                         .extend(stats.skipped_missing_ticket);
@@ -370,7 +376,7 @@ impl<'a> Run<'a> {
                             file: file_name.clone(),
                             error,
                         }));
-                    totals.files_read += 1;
+                    totals.files_read = totals.files_read.saturating_add(1);
                 }
                 Err(e) => {
                     error!("Failed to read file {:?}: {}", file_name, e);
@@ -457,19 +463,19 @@ impl<'a> Run<'a> {
                 Err(e) => {
                     sheet.log_pending_skips();
                     error!("Failed to deserialize row in {}: {}", source, e);
-                    sheet.processed += 1;
+                    sheet.processed = sheet.processed.saturating_add(1);
                     sheet.unparsed.push(e);
                     continue;
                 }
             };
-            sheet.processed += 1;
+            sheet.processed = sheet.processed.saturating_add(1);
             let action_id = action.action_id();
             if self.config.only_parse {
                 // Counted as a real run would: a repeated id is skipped.
                 if self.existing_ids.insert(action_id) {
-                    sheet.imported += 1;
+                    sheet.imported = sheet.imported.saturating_add(1);
                 } else {
-                    sheet.skipped += 1;
+                    sheet.skipped = sheet.skipped.saturating_add(1);
                 }
             } else if self.existing_ids.contains(&action_id)
                 || sheet
@@ -477,11 +483,9 @@ impl<'a> Run<'a> {
                     .iter()
                     .any(|queued| queued.action_id() == action_id)
             {
-                sheet.skipped += 1;
-                sheet.pending_skips += 1;
+                sheet.count_skip();
             } else if self.missing_tickets.contains(&action.ticket_id) {
-                sheet.skipped += 1;
-                sheet.pending_skips += 1;
+                sheet.count_skip();
                 sheet.skipped_missing_ticket.push(FailedAction {
                     action,
                     error_type: TICKET_NOT_FOUND.to_string(),
@@ -500,7 +504,7 @@ impl<'a> Run<'a> {
         sheet.log_pending_skips();
         let sheet_duration = sheet_start.elapsed().as_secs_f64();
         self.sheet_times.push(sheet_duration);
-        let avg_sheet_time = self.sheet_times.iter().sum::<f64>() / self.sheet_times.len() as f64;
+        let avg_sheet_time = format::mean(&self.sheet_times);
         info!(
             "Completed sheet {} of {}: {} | {} processed, {} imported, {} skipped in {:.1}s | avg sheet time: {:.1}s",
             sheet_number,
@@ -545,13 +549,14 @@ impl<'a> Run<'a> {
         match client.post_action_objects(&batch).await {
             Ok(()) => {
                 let batch_count = batch.len();
-                sheet.imported += batch_count;
-                sheet.batch_number += 1;
+                sheet.imported = sheet.imported.saturating_add(batch_count);
+                sheet.batch_number = sheet.batch_number.saturating_add(1);
 
                 let batch_time = sheet.batch_start.elapsed().as_secs_f64();
-                sheet.row_times.push(batch_time / batch_count as f64);
-                let avg_row_time =
-                    sheet.row_times.iter().sum::<f64>() / sheet.row_times.len() as f64;
+                sheet
+                    .row_times
+                    .push(batch_time / format::count_to_f64(batch_count));
+                let avg_row_time = format::mean(&sheet.row_times);
 
                 if let [action] = batch.as_slice()
                     && self.config.batch_size == 1
@@ -575,8 +580,7 @@ impl<'a> Run<'a> {
                         .map(u32::to_string)
                         .collect::<Vec<_>>()
                         .join(", ");
-                    let total_batches =
-                        (sheet.total_rows as f64 / self.config.batch_size as f64).ceil() as usize;
+                    let total_batches = sheet.total_rows.div_ceil(self.config.batch_size.max(1));
                     info!(
                         "Imported batch {}/{} | {}/{} actions (tickets: {}) | {} total skipped | {:.2}s/batch, {:.2}s/action | ETA: {}",
                         sheet.batch_number,
@@ -598,14 +602,14 @@ impl<'a> Run<'a> {
                 let outcome =
                     settle_failed_batch(client, batch, e, &mut self.missing_tickets, label).await;
                 if outcome.regrouped {
-                    sheet.batch_number += 1;
+                    sheet.batch_number = sheet.batch_number.saturating_add(1);
                 }
                 let recovered = outcome.imported.len();
-                sheet.imported += recovered;
+                sheet.imported = sheet.imported.saturating_add(recovered);
                 if recovered > 0 {
                     record_imported(self.config.cache, &mut self.existing_ids, &outcome.imported);
                     let avg_action_time =
-                        sheet.batch_start.elapsed().as_secs_f64() / batch_len as f64;
+                        sheet.batch_start.elapsed().as_secs_f64() / format::count_to_f64(batch_len);
                     sheet
                         .row_times
                         .extend(std::iter::repeat_n(avg_action_time, recovered));
@@ -643,7 +647,7 @@ pub fn write_retry_csv<'a>(
 
     let mut written = 0usize;
     for failed_action in failed {
-        written += 1;
+        written = written.saturating_add(1);
         let action = &failed_action.action;
 
         // The date stays Arizona time, as the input files have it.
@@ -762,7 +766,7 @@ pub fn write_summary_json(
     let json_path = format!("{}/summary.json", log_dir);
 
     let rows_per_second = if runtime_secs > 0.0 {
-        total_processed as f64 / runtime_secs
+        format::count_to_f64(total_processed) / runtime_secs
     } else {
         0.0
     };
@@ -770,7 +774,7 @@ pub fn write_summary_json(
     let actions_per_minute = rows_per_second * 60.0;
 
     let avg_time_per_action = if total_imported > 0 {
-        runtime_secs / total_imported as f64
+        runtime_secs / format::count_to_f64(total_imported)
     } else {
         0.0
     };
@@ -884,14 +888,13 @@ mod tests {
             files.len(),
         );
         let mut stats = Vec::new();
-        for (number, (file_name, csv)) in files.iter().enumerate() {
+        for ((file_name, csv), number) in files.iter().zip(1..) {
             let path = dir.join(file_name);
             std::fs::write(&path, csv).unwrap();
-            let file_stats =
-                tokio::time::timeout(HUNG, run.process_file(&path, file_name, number + 1))
-                    .await
-                    .expect("the import hung")
-                    .unwrap();
+            let file_stats = tokio::time::timeout(HUNG, run.process_file(&path, file_name, number))
+                .await
+                .expect("the import hung")
+                .unwrap();
             stats.push(file_stats);
         }
         let cached =
@@ -1275,7 +1278,7 @@ mod tests {
         for (ticket, action) in rows {
             sheet.push(vec![
                 Cell::Number(f64::from(*ticket)),
-                Cell::Number(*action as f64),
+                Cell::Number(f64::from(u32::try_from(*action).unwrap())),
                 Cell::Text("w"),
                 Cell::Text("n"),
                 Cell::Empty,

@@ -1,6 +1,7 @@
 //! Excel files: the first worksheet, read into memory.
 
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::Context;
 use calamine::{Data, Reader as CalamineReader};
@@ -19,9 +20,10 @@ fn excel_serial_to_datetime(serial: f64) -> Option<NaiveDateTime> {
     let mut days = serial.floor() as i64;
     // Excel stores times as fractions of a day, so a time typed as 10:00:00
     // can come back a hair short; round to the nearest second.
-    let mut seconds_in_day = (serial.fract() * f64::from(SECONDS_PER_DAY))
-        .round()
-        .max(0.0) as u32;
+    // A negative fraction reads as midnight.
+    let rounded = (serial.fract() * f64::from(SECONDS_PER_DAY)).round();
+    let mut seconds_in_day =
+        u32::try_from(Duration::try_from_secs_f64(rounded).map_or(0, |d| d.as_secs())).ok()?;
     if seconds_in_day >= SECONDS_PER_DAY {
         days = days.checked_add(1)?;
         seconds_in_day = 0;
@@ -98,7 +100,7 @@ impl Actions {
             return None;
         }
         let row = &self.rows[self.row_num];
-        let row_num_for_error = self.first_data_row + self.row_num;
+        let row_num_for_error = self.first_data_row.saturating_add(self.row_num);
         let mut record = serde_json::Map::new();
         let mut has_any_data = false;
         let mut bad_ticket_id: Option<String> = None;
@@ -283,7 +285,7 @@ impl Actions {
             };
             record.insert(normalized_header, cell_value);
         }
-        self.row_num += 1;
+        self.row_num = self.row_num.saturating_add(1);
         if let Some(value) = bad_ticket_id {
             return Some(Some(Err(RowError {
                 row: row_num_for_error,
@@ -396,7 +398,7 @@ pub fn actions(path: &Path) -> anyhow::Result<Actions> {
         file_name,
         sheet_name: first_sheet_name,
         row_num: 0,
-        first_data_row: header_row + 2,
+        first_data_row: header_row.saturating_add(2),
     })
 }
 

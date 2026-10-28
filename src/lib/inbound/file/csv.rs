@@ -29,7 +29,7 @@ impl Iterator for Actions {
     fn next(&mut self) -> Option<Self::Item> {
         let result = self.rdr.next()?;
         // Every record counts, good or bad, so the numbers match the file's data rows.
-        self.row_num += 1;
+        self.row_num = self.row_num.saturating_add(1);
         Some(result.map_err(|e| RowError {
             row: self.row_num,
             message: format!(
@@ -56,12 +56,7 @@ pub fn actions(path: &Path) -> anyhow::Result<Actions> {
         let file = std::fs::File::open(path)
             .with_context(|| format!("failed to open csv file: {}", file_name))?;
         let mut rdr = ReaderBuilder::new().has_headers(true).from_reader(file);
-        let mut count = 0;
-        let mut records = rdr.records();
-        while records.next().is_some() {
-            count += 1;
-        }
-        count
+        rdr.records().count()
     };
     let file = std::fs::File::open(path)
         .with_context(|| format!("failed to open csv file: {}", file_name))?;
