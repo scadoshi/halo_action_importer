@@ -16,6 +16,16 @@ fn excel_serial_to_datetime(serial: f64) -> Option<NaiveDateTime> {
     Some(NaiveDateTime::new(date, time))
 }
 
+/// A ticket ID from a numeric cell: a whole number that fits a `u32`.
+fn ticket_id_from_float(value: f64) -> Option<u32> {
+    let in_range = (0.0..=f64::from(u32::MAX)).contains(&value);
+    if in_range && value.fract() == 0.0 {
+        Some(value as u32)
+    } else {
+        None
+    }
+}
+
 pub trait Excel {
     fn try_excel_to_action_objects(path: &Path) -> anyhow::Result<Vec<ActionObject>>;
     fn excel_action_iter(path: &Path) -> anyhow::Result<ExcelActionIterator>;
@@ -50,6 +60,7 @@ impl Iterator for ExcelActionIterator {
         let row_num_for_error = self.row_num + 1;
         let mut record = serde_json::Map::new();
         let mut has_any_data = false;
+        let mut bad_ticket_id: Option<String> = None;
         for (idx, header) in self.headers.iter().enumerate() {
             let header_lower = header.to_lowercase();
             let is_date_field = header_lower == "actiondate"
@@ -128,7 +139,13 @@ impl Iterator for ExcelActionIterator {
                                 None => serde_json::Value::Null,
                             }
                         } else if is_numeric_field {
-                            serde_json::Value::Number((*f as u32).into())
+                            match ticket_id_from_float(*f) {
+                                Some(id) => serde_json::Value::Number(id.into()),
+                                None => {
+                                    bad_ticket_id = Some(f.to_string());
+                                    serde_json::Value::Null
+                                }
+                            }
                         } else {
                             serde_json::Value::String(f.to_string())
                         }
@@ -136,7 +153,13 @@ impl Iterator for ExcelActionIterator {
                     Data::Int(i) => {
                         has_any_data = true;
                         if is_numeric_field {
-                            serde_json::Value::Number((*i as u32).into())
+                            match u32::try_from(*i) {
+                                Ok(id) => serde_json::Value::Number(id.into()),
+                                Err(_) => {
+                                    bad_ticket_id = Some(i.to_string());
+                                    serde_json::Value::Null
+                                }
+                            }
                         } else {
                             serde_json::Value::String(i.to_string())
                         }
@@ -224,6 +247,16 @@ impl Iterator for ExcelActionIterator {
             record.insert(normalized_header, cell_value);
         }
         self.row_num += 1;
+        if let Some(value) = bad_ticket_id {
+            return Some(Err(anyhow::anyhow!(
+                "ticket id {} in row {} of worksheet '{}' of excel file '{}' is not a whole number from 0 to {}",
+                value,
+                row_num_for_error,
+                self.sheet_name,
+                self.file_name,
+                u32::MAX
+            )));
+        }
         if !has_any_data {
             return self.next();
         }
@@ -346,5 +379,52 @@ mod tests {
             excel_serial_to_datetime(45658.5),
             Some(at(2025, 1, 1, 12, 0))
         );
+    }
+
+    fn sheet(headers: &[&str], rows: Vec<Vec<Data>>) -> ExcelActionIterator {
+        ExcelActionIterator {
+            rows,
+            headers: headers.iter().map(|h| (*h).to_string()).collect(),
+            file_name: "book.xlsx".to_string(),
+            sheet_name: "Sheet1".to_string(),
+            row_num: 0,
+        }
+    }
+
+    fn row(ticket: Data) -> Vec<Data> {
+        vec![
+            ticket,
+            Data::Int(1),
+            Data::String("w".to_string()),
+            Data::String("n".to_string()),
+            Data::Empty,
+        ]
+    }
+
+    const HEADERS: &[&str] = &["requestId", "actionId", "actionWho", "note", "actionDate"];
+
+    #[test]
+    fn a_ticket_id_that_does_not_fit_or_is_not_whole_is_a_row_error() {
+        for bad in [
+            Data::Float(4_294_967_301.0),
+            Data::Float(10.5),
+            Data::Float(-1.0),
+            Data::Int(4_294_967_301),
+            Data::Int(-1),
+        ] {
+            let mut iter = sheet(HEADERS, vec![row(bad.clone())]);
+            let message = iter.next().unwrap().unwrap_err().to_string();
+            assert!(message.contains("row"), "{bad:?}: {message}");
+        }
+    }
+
+    #[test]
+    fn a_whole_ticket_id_reads_from_a_float_or_an_int() {
+        let mut iter = sheet(
+            HEADERS,
+            vec![row(Data::Float(10.0)), row(Data::Int(4_294_967_295))],
+        );
+        assert_eq!(iter.next().unwrap().unwrap().ticket_id, 10);
+        assert_eq!(iter.next().unwrap().unwrap().ticket_id, u32::MAX);
     }
 }
