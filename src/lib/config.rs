@@ -2,7 +2,7 @@ use anyhow::Context;
 use reqwest::Url;
 use tracing::Level;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     pub base_resource_url: Url,
     pub token_url: Url,
@@ -12,6 +12,20 @@ pub struct Config {
     /// The name of the action custom field that holds the action ID, such as `cfactionid`.
     pub action_id_custom_field: String,
     pub log_level: Level,
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("base_resource_url", &self.base_resource_url)
+            .field("token_url", &self.token_url)
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"[redacted]")
+            .field("action_ids_resource_uuids", &self.action_ids_resource_uuids)
+            .field("action_id_custom_field", &self.action_id_custom_field)
+            .field("log_level", &self.log_level)
+            .finish()
+    }
 }
 
 const BASE_RESOURCE_URL_KEY: &str = "BASE_RESOURCE_URL";
