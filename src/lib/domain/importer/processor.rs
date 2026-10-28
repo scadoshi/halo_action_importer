@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsStr;
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -673,6 +673,7 @@ struct SummaryJson {
     performance: Performance,
     files_processed: usize,
     files_skipped: usize,
+    /// One entry per error type, in name order.
     error_summary: Vec<ErrorTypeSummary>,
 }
 
@@ -741,7 +742,7 @@ pub fn write_summary_json(
     };
 
     // Group errors by type
-    let mut error_map: HashMap<String, Vec<u32>> = HashMap::new();
+    let mut error_map: BTreeMap<String, Vec<u32>> = BTreeMap::new();
     for failed_action in failed {
         error_map
             .entry(failed_action.error_type.clone())
@@ -769,6 +770,7 @@ pub fn write_summary_json(
             failures: unparsed.len(),
             affected_tickets: Vec::new(),
         });
+        error_summary.sort_by(|a, b| a.error_type.cmp(&b.error_type));
     }
 
     // Format runtime
@@ -1405,7 +1407,7 @@ mod tests {
         ])
         .await;
 
-        let mut run = run_files(
+        let run = run_files(
             &server,
             "pin_summary",
             &[
@@ -1421,11 +1423,6 @@ mod tests {
             posted_ids(&run.requests),
             [vec![10], vec![11], vec![20], vec![30], vec![30]]
         );
-        // The error summary comes out in no fixed order.
-        run.summary["error_summary"]
-            .as_array_mut()
-            .unwrap()
-            .sort_by_key(|entry| entry["error_type"].as_str().unwrap().to_string());
         assert_eq!(
             run.summary,
             serde_json::json!({
@@ -1702,5 +1699,49 @@ mod tests {
             assert_eq!(lines.next(), None, "{}", file.0);
             assert_eq!(run.retry_csv, None, "{}", file.0);
         }
+    }
+
+    #[tokio::test]
+    async fn the_error_summary_lists_error_types_in_name_order() {
+        let mut csv = format!("{HEADER}nope,1,w,n,\n");
+        for ticket in 1..=5 {
+            csv.push_str(&format!("{ticket},{ticket}0,w,n,\n"));
+        }
+        let server = TestServer::start(vec![
+            TOKEN,
+            Reply::Json(500, "{}"),
+            Reply::Json(400, "{}"),
+            Reply::Json(404, "{}"),
+            Reply::Hangup,
+            Reply::Json(504, "{}"),
+        ])
+        .await;
+
+        let run = run_files(
+            &server,
+            "sum_order",
+            &[("a.csv", csv.into_bytes())],
+            1,
+            false,
+        )
+        .await;
+
+        let types: Vec<&str> = run.summary["error_summary"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["error_type"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            types,
+            [
+                "Gateway timeout",
+                "Network error",
+                "Parse error",
+                "Server error",
+                "Ticket not found",
+                "Validation error",
+            ]
+        );
     }
 }
