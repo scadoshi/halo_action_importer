@@ -28,19 +28,17 @@ impl Iterator for CsvActionIterator {
     type Item = anyhow::Result<ActionObject>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self.rdr.next() {
-            Some(Ok(action)) => {
-                self.row_num += 1;
-                Some(Ok(action))
-            }
-            Some(Err(e)) => Some(Err(anyhow::anyhow!(
+        let result = self.rdr.next()?;
+        // Every record counts, good or bad, so the numbers match the file's data rows.
+        self.row_num += 1;
+        Some(result.map_err(|e| {
+            anyhow::anyhow!(
                 "failed to deserialize row {} in csv file: {}: {}",
-                self.row_num + 1,
+                self.row_num,
                 self.file_name,
                 e
-            ))),
-            None => None,
-        }
+            )
+        }))
     }
 }
 
@@ -189,5 +187,24 @@ mod tests {
         let actions = Reader::try_csv_to_action_objects(&path).unwrap();
         std::fs::remove_file(&path).unwrap();
         assert_eq!(actions[0].ticket_id, 12);
+    }
+
+    #[test]
+    fn row_numbers_stay_right_after_a_bad_row() {
+        let path = write(
+            "two_bad.csv",
+            "ticket_id,actionId,actionwho,note,actiondate\n\
+             1,1,w,n,\n\
+             nope,2,w,n,\n\
+             nope,3,w,n,\n",
+        );
+        let errors: Vec<String> = Reader::csv_action_iter(&path)
+            .unwrap()
+            .filter_map(Result::err)
+            .map(|e| e.to_string())
+            .collect();
+        std::fs::remove_file(&path).unwrap();
+        assert!(errors[0].contains("row 2"), "{}", errors[0]);
+        assert!(errors[1].contains("row 3"), "{}", errors[1]);
     }
 }
