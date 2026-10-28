@@ -1,6 +1,6 @@
 use tracing::{info, warn};
 
-use super::format::format_number;
+use super::format;
 
 pub struct ImportSummary {
     pub total_processed: usize,
@@ -26,32 +26,32 @@ pub fn log_summary(summary: ImportSummary, only_parse: bool) {
     info!("=== Import Summary ===");
     info!(
         "Total actions processed: {}",
-        format_number(summary.total_processed)
+        format::format_number(summary.total_processed)
     );
     info!(
         "Actions skipped (already exist): {}",
-        format_number(summary.total_skipped)
+        format::format_number(summary.total_skipped)
     );
     info!(
         "Actions successfully imported: {}",
-        format_number(summary.total_imported)
+        format::format_number(summary.total_imported)
     );
     info!(
         "Actions failed to import: {}",
-        format_number(summary.total_failed)
+        format::format_number(summary.total_failed)
     );
     if !summary.skipped_files.is_empty() {
         warn!(
             "Files that could not be read: {}",
-            format_number(summary.skipped_files.len())
+            format::format_number(summary.skipped_files.len())
         );
     }
     if only_parse && summary.total_failed == 0 && summary.skipped_files.is_empty() {
         let successful = summary.total_imported + summary.total_skipped;
         info!(
             "Success: {}/{} actions parsed successfully",
-            format_number(successful),
-            format_number(summary.total_processed)
+            format::format_number(successful),
+            format::format_number(summary.total_processed)
         );
     }
     if summary.total_processed > 0 {

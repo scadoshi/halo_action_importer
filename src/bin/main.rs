@@ -5,10 +5,9 @@ use anyhow::Context;
 use clap::Parser;
 use halo_action_importer::cli::Cli;
 use halo_action_importer::config::Config;
-use halo_action_importer::domain::importer::format::format_number;
 use halo_action_importer::domain::importer::{
-    Cache, ImportSummary, ProcessConfig, Run, SetupOptions, SetupResult, exit_code, log_summary,
-    setup, write_retry_csv, write_summary_json, write_unparsed_csv,
+    Cache, ImportSummary, ProcessConfig, Run, SetupOptions, SetupResult, format, processor, setup,
+    summary,
 };
 use tracing::info;
 
@@ -51,16 +50,19 @@ async fn main() -> anyhow::Result<ExitCode> {
     if batch_size > 1 {
         info!(
             "Batch mode enabled: posting {} actions per request",
-            format_number(batch_size)
+            format::format_number(batch_size)
         );
     }
     if only_parse {
         info!(
             "Starting parse-only import of {} file(s)",
-            format_number(total_sheets)
+            format::format_number(total_sheets)
         );
     } else {
-        info!("Starting import of {} file(s)", format_number(total_sheets));
+        info!(
+            "Starting import of {} file(s)",
+            format::format_number(total_sheets)
+        );
     }
     let start_time = Instant::now();
     let run = Run::new(
@@ -76,7 +78,7 @@ async fn main() -> anyhow::Result<ExitCode> {
     let totals = run.process_files(&files_to_process).await;
 
     let total_runtime = start_time.elapsed().as_secs_f64();
-    let summary = ImportSummary {
+    let import_summary = ImportSummary {
         total_processed: totals.processed,
         total_imported: totals.imported,
         total_skipped: totals.skipped,
@@ -85,18 +87,18 @@ async fn main() -> anyhow::Result<ExitCode> {
         total_runtime_secs: total_runtime,
         sheet_times: totals.sheet_times.clone(),
     };
-    let code = exit_code(&summary);
-    log_summary(summary, only_parse);
+    let code = summary::exit_code(&import_summary);
+    summary::log_summary(import_summary, only_parse);
 
     // Write retry.csv, unparsed.csv and summary.json
     if totals.retry_actions().next().is_some() {
-        write_retry_csv(&log_dir_path, totals.retry_actions())?;
+        processor::write_retry_csv(&log_dir_path, totals.retry_actions())?;
     }
     if !totals.unparsed.is_empty() {
-        write_unparsed_csv(&log_dir_path, &totals.unparsed)?;
+        processor::write_unparsed_csv(&log_dir_path, &totals.unparsed)?;
     }
 
-    write_summary_json(&log_dir_path, &totals, total_runtime)?;
+    processor::write_summary_json(&log_dir_path, &totals, total_runtime)?;
 
     Ok(ExitCode::from(code))
 }

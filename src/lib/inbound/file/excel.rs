@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::Context;
-use calamine::{Data, Reader as CalamineReader, open_workbook_auto};
+use calamine::{Data, Reader as CalamineReader};
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 
 use crate::domain::models::action_object::ActionObject;
@@ -338,7 +338,7 @@ pub fn actions(path: &Path) -> anyhow::Result<Actions> {
         .and_then(|n| n.to_str())
         .unwrap_or("unknown file")
         .to_string();
-    let mut workbook = open_workbook_auto(path)
+    let mut workbook = calamine::open_workbook_auto(path)
         .with_context(|| format!("failed to open excel file: {}", file_name))?;
     let sheet_names = workbook.sheet_names().to_owned();
     let first_sheet_name = sheet_names

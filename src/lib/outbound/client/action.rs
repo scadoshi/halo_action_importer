@@ -184,13 +184,14 @@ mod tests {
     use super::*;
     use crate::domain::models::action_object::ActionId;
     use crate::outbound::client::auth::AuthClient;
-    use crate::test_server::{Reply, SHORT_TIMEOUT, TOKEN, TestServer, config, lines};
+    use crate::test_server;
+    use crate::test_server::{Reply, SHORT_TIMEOUT, TOKEN, TestServer};
 
     /// How long a test lets a post run before calling it hung.
     const HUNG: std::time::Duration = std::time::Duration::from_secs(5);
 
     fn client(server: &TestServer) -> ActionClient {
-        let config = config(server.base_url());
+        let config = test_server::config(server.base_url());
         let auth_client = Arc::new(AuthClient::new(config.clone()).unwrap());
         ActionClient::new(config, auth_client).unwrap()
     }
@@ -229,7 +230,7 @@ mod tests {
         assert!(result.is_ok(), "{result:?}");
         let requests = server.requests();
         assert_eq!(
-            lines(&requests),
+            test_server::lines(&requests),
             [POST_TOKEN, POST_ACTIONS, POST_TOKEN, POST_ACTIONS]
         );
         assert!(
@@ -260,7 +261,7 @@ mod tests {
         let message = format!("{:#}", result.unwrap_err());
         assert!(message.contains("401"), "{message}");
         assert_eq!(
-            lines(&server.requests()),
+            test_server::lines(&server.requests()),
             [POST_TOKEN, POST_ACTIONS, POST_TOKEN, POST_ACTIONS]
         );
     }
@@ -278,7 +279,10 @@ mod tests {
 
         let message = format!("{:#}", result.unwrap_err());
         assert!(message.contains("504"), "{message}");
-        assert_eq!(lines(&server.requests()), [POST_TOKEN, POST_ACTIONS]);
+        assert_eq!(
+            test_server::lines(&server.requests()),
+            [POST_TOKEN, POST_ACTIONS]
+        );
     }
 
     #[tokio::test]
@@ -293,13 +297,16 @@ mod tests {
         .expect("the post hung");
 
         assert!(matches!(result, Err(PostError::Network(_))), "{result:?}");
-        assert_eq!(lines(&server.requests()), [POST_TOKEN, POST_ACTIONS]);
+        assert_eq!(
+            test_server::lines(&server.requests()),
+            [POST_TOKEN, POST_ACTIONS]
+        );
     }
 
     #[tokio::test]
     async fn a_post_that_times_out_is_an_error_and_not_sent_again() {
         let server = TestServer::start(vec![TOKEN, Reply::Stall]).await;
-        let config = config(server.base_url());
+        let config = test_server::config(server.base_url());
         let auth_client = Arc::new(AuthClient::new(config.clone()).unwrap());
         let client =
             ActionClient::with_request_timeout(config, auth_client, SHORT_TIMEOUT).unwrap();
@@ -309,7 +316,10 @@ mod tests {
             .expect("the post hung");
 
         assert!(matches!(result, Err(PostError::Timeout(_))), "{result:?}");
-        assert_eq!(lines(&server.requests()), [POST_TOKEN, POST_ACTIONS]);
+        assert_eq!(
+            test_server::lines(&server.requests()),
+            [POST_TOKEN, POST_ACTIONS]
+        );
     }
 
     /// Posts one action to a server that answers `status` with `body`.

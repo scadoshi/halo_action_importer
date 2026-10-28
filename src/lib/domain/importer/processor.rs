@@ -9,7 +9,7 @@ use csv::Writer;
 use serde::Serialize;
 use tracing::{error, info, warn};
 
-use super::format::{format_duration, format_eta, format_number};
+use super::format;
 use crate::domain::importer::setup::Cache;
 use crate::domain::models::action_object::{ActionId, ActionObject};
 use crate::inbound::file;
@@ -306,7 +306,7 @@ impl Sheet {
         if self.pending_skips > 0 {
             info!(
                 "Skipped {} entries (already exist)",
-                format_number(self.pending_skips)
+                format::format_number(self.pending_skips)
             );
             self.pending_skips = 0;
         }
@@ -438,7 +438,7 @@ impl<'a> Run<'a> {
             sheet_number,
             self.total_sheets,
             source,
-            format_number(total_rows)
+            format::format_number(total_rows)
         );
         for row in rows {
             let action = match row {
@@ -495,9 +495,9 @@ impl<'a> Run<'a> {
             sheet_number,
             self.total_sheets,
             source,
-            format_number(sheet.processed),
-            format_number(sheet.imported),
-            format_number(sheet.skipped),
+            format::format_number(sheet.processed),
+            format::format_number(sheet.imported),
+            format::format_number(sheet.skipped),
             sheet_duration,
             avg_sheet_time
         );
@@ -551,9 +551,9 @@ impl<'a> Run<'a> {
                         sheet.total_rows,
                         action.action_id(),
                         action.ticket_id,
-                        format_number(sheet.skipped),
+                        format::format_number(sheet.skipped),
                         avg_row_time,
-                        format_eta(remaining_rows, avg_row_time)
+                        format::format_eta(remaining_rows, avg_row_time)
                     );
                 } else {
                     let mut ticket_ids: Vec<u32> = batch.iter().map(|a| a.ticket_id).collect();
@@ -573,10 +573,10 @@ impl<'a> Run<'a> {
                         sheet.imported,
                         sheet.total_rows,
                         ticket_ids,
-                        format_number(sheet.skipped),
+                        format::format_number(sheet.skipped),
                         batch_time,
                         avg_row_time,
-                        format_eta(remaining_rows, avg_row_time)
+                        format::format_eta(remaining_rows, avg_row_time)
                     );
                 }
 
@@ -790,7 +790,7 @@ pub fn write_summary_json(
     }
 
     // Format runtime
-    let runtime_formatted = format_duration(runtime_secs);
+    let runtime_formatted = format::format_duration(runtime_secs);
 
     let summary = SummaryJson {
         timestamp: Utc::now().to_rfc3339(),
@@ -827,10 +827,12 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::domain::importer::summary::{ImportSummary, exit_code};
+    use crate::domain::importer::summary;
+    use crate::domain::importer::summary::ImportSummary;
     use crate::outbound::client::auth::AuthClient;
-    use crate::test_server::{Reply, Request, TOKEN, TestServer, config, lines, scratch_dir};
-    use crate::test_xlsx::{Cell, xlsx};
+    use crate::test_server::{Reply, Request, TOKEN, TestServer};
+    use crate::test_xlsx::Cell;
+    use crate::{test_server, test_xlsx};
 
     /// Imports each `(name, csv)` file in turn, batch by batch, against
     /// `server`, with a scratch cache, and returns each file's stats.
@@ -850,9 +852,9 @@ mod tests {
         files: &[(&str, &str)],
         batch_size: usize,
     ) -> (Vec<ProcessingStats>, String) {
-        let dir = scratch_dir(name);
+        let dir = test_server::scratch_dir(name);
         let cache = Cache::new(dir.join("cache"));
-        let config = config(server.base_url());
+        let config = test_server::config(server.base_url());
         let auth_client = Arc::new(AuthClient::new(config.clone()).unwrap());
         let client = ActionClient::new(config, auth_client).unwrap();
         let mut run = Run::new(
@@ -912,7 +914,7 @@ mod tests {
         let stats = import(&server, "proc_400_not_found", &[("a.csv", &csv)], 1).await;
 
         assert_eq!(
-            lines(&server.requests()),
+            test_server::lines(&server.requests()),
             [POST_TOKEN, POST_ACTIONS, POST_ACTIONS]
         );
         assert_eq!(error_types(&stats[0]), [(10, "Validation error")]);
@@ -927,7 +929,10 @@ mod tests {
         let stats = import(&server, "proc_404", &[("a.csv", &csv)], 1).await;
 
         let requests = server.requests();
-        assert_eq!(lines(&requests), [POST_TOKEN, POST_ACTIONS, POST_ACTIONS]);
+        assert_eq!(
+            test_server::lines(&requests),
+            [POST_TOKEN, POST_ACTIONS, POST_ACTIONS]
+        );
         assert!(
             requests[2].body.contains(r#""cfactionid":20"#),
             "{}",
@@ -952,7 +957,7 @@ mod tests {
 
         let requests = server.requests();
         assert_eq!(
-            lines(&requests),
+            test_server::lines(&requests),
             [POST_TOKEN, POST_ACTIONS, POST_ACTIONS, POST_ACTIONS]
         );
         assert!(
@@ -977,7 +982,7 @@ mod tests {
         let stats = import(&server, "proc_504", &[("a.csv", &csv)], 1).await;
 
         assert_eq!(
-            lines(&server.requests()),
+            test_server::lines(&server.requests()),
             [POST_TOKEN, POST_ACTIONS, POST_ACTIONS]
         );
         assert_eq!(error_types(&stats[0]), [(10, "Gateway timeout")]);
@@ -992,7 +997,7 @@ mod tests {
         let stats = import(&server, "proc_hangup", &[("a.csv", &csv)], 1).await;
 
         assert_eq!(
-            lines(&server.requests()),
+            test_server::lines(&server.requests()),
             [POST_TOKEN, POST_ACTIONS, POST_ACTIONS]
         );
         assert_eq!(error_types(&stats[0]), [(10, "Network error")]);
@@ -1029,7 +1034,10 @@ mod tests {
         )
         .await;
 
-        assert_eq!(lines(&server.requests()), [POST_TOKEN, POST_ACTIONS]);
+        assert_eq!(
+            test_server::lines(&server.requests()),
+            [POST_TOKEN, POST_ACTIONS]
+        );
         assert_eq!((stats[1].imported, stats[1].skipped), (0, 1));
         assert!(stats[1].failed.is_empty());
     }
@@ -1044,7 +1052,7 @@ mod tests {
 
             let requests = server.requests();
             assert_eq!(
-                lines(&requests),
+                test_server::lines(&requests),
                 [POST_TOKEN, POST_ACTIONS],
                 "batch {batch_size}"
             );
@@ -1078,13 +1086,16 @@ mod tests {
         let server = TestServer::start(vec![TOKEN, Reply::Json(504, "{}")]).await;
         let csv = format!("{HEADER}1,10,w,n,\n");
         let stats = import(&server, "proc_504_retry_csv", &[("a.csv", &csv)], 1).await;
-        let dir = scratch_dir("proc_504_retry_csv_log");
+        let dir = test_server::scratch_dir("proc_504_retry_csv_log");
 
         write_retry_csv(dir.to_str().unwrap(), &stats[0].failed).unwrap();
 
         let written = std::fs::read_to_string(dir.join("retry.csv")).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
-        assert_eq!(lines(&server.requests()), [POST_TOKEN, POST_ACTIONS]);
+        assert_eq!(
+            test_server::lines(&server.requests()),
+            [POST_TOKEN, POST_ACTIONS]
+        );
         assert!(
             written.ends_with("1,10,,w,n,Imported Note,Gateway timeout\n"),
             "{written}"
@@ -1138,12 +1149,12 @@ mod tests {
         batch_size: usize,
         only_parse: bool,
     ) -> RunOutput {
-        let dir = scratch_dir(name);
+        let dir = test_server::scratch_dir(name);
         let log_dir = dir.join("log");
         std::fs::create_dir_all(&log_dir).unwrap();
         let log_dir_str = log_dir.to_str().unwrap();
         let cache = Cache::new(dir.join("cache"));
-        let config = config(server.base_url());
+        let config = test_server::config(server.base_url());
         let client = (!only_parse).then(|| {
             let auth_client = Arc::new(AuthClient::new(config.clone()).unwrap());
             ActionClient::new(config, auth_client).unwrap()
@@ -1167,7 +1178,7 @@ mod tests {
         let totals = tokio::time::timeout(HUNG, run.process_files(&paths))
             .await
             .expect("the import hung");
-        let code = exit_code(&ImportSummary {
+        let code = summary::exit_code(&ImportSummary {
             total_processed: totals.processed,
             total_imported: totals.imported,
             total_skipped: totals.skipped,
@@ -1254,7 +1265,7 @@ mod tests {
                 Cell::Empty,
             ]);
         }
-        xlsx(&sheet)
+        test_xlsx::xlsx(&sheet)
     }
 
     /// The same rows as a CSV file and as an Excel file.
@@ -1648,7 +1659,7 @@ mod tests {
     /// an Excel file.
     fn files_with_a_bad_row() -> [(&'static str, Vec<u8>); 2] {
         let csv = format!("{HEADER}1,10,w,n,\nnope,11,w,n,\n").into_bytes();
-        let excel = xlsx(&[
+        let excel = test_xlsx::xlsx(&[
             vec![
                 Cell::Text("requestId"),
                 Cell::Text("actionId"),

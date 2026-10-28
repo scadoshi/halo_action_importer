@@ -15,7 +15,7 @@ use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-use super::format::format_number;
+use super::format;
 use crate::config::Config;
 use crate::domain::models::action_object::ActionId;
 use crate::inbound::client::ReportClient;
@@ -56,7 +56,7 @@ pub fn parse_action_ids<'a>(ids: impl IntoIterator<Item = &'a str>, source: &str
     if rejected > 0 {
         warn!(
             "Ignored {} action ID(s) in {} that are not whole numbers",
-            format_number(rejected),
+            format::format_number(rejected),
             source
         );
     }
@@ -339,7 +339,7 @@ pub async fn setup_auth_and_existing_ids(
     let cache_data = cache.read()?;
     info!(
         "Cache: {} existing action IDs from {} resource(s)",
-        format_number(cache_data.action_ids.len()),
+        format::format_number(cache_data.action_ids.len()),
         cache_data.fetched_resources.len()
     );
     let refuses_empty = !(options.sync_from_halo || options.fresh || options.only_parse);
@@ -360,7 +360,7 @@ pub async fn setup_auth_and_existing_ids(
     if !options.sync_from_halo {
         info!(
             "Using {} cached IDs; run with --sync-from-halo to fetch the reports",
-            format_number(cache_data.action_ids.len())
+            format::format_number(cache_data.action_ids.len())
         );
         if options.only_parse {
             return Ok((None, cache_data.action_ids));
@@ -375,7 +375,7 @@ pub async fn setup_auth_and_existing_ids(
         .context("Failed to fetch existing action IDs from report")?;
     info!(
         "Fetched {} action IDs from reports",
-        format_number(report_ids.len())
+        format::format_number(report_ids.len())
     );
 
     let mut all_ids = cache_data.action_ids;
@@ -385,8 +385,8 @@ pub async fn setup_auth_and_existing_ids(
 
     info!(
         "Total {} existing action IDs to skip ({} new from reports)",
-        format_number(all_ids.len()),
-        format_number(new_from_reports)
+        format::format_number(all_ids.len()),
+        format::format_number(new_from_reports)
     );
 
     if options.only_parse {
@@ -468,7 +468,8 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::test_server::{Reply, TOKEN, TestServer, config, lines};
+    use crate::test_server;
+    use crate::test_server::{Reply, TOKEN, TestServer};
 
     #[test]
     fn discovery_takes_spreadsheets_at_the_top_level_only_whatever_the_case() {
@@ -490,7 +491,7 @@ mod tests {
 
     #[test]
     fn discovered_files_come_in_name_order() {
-        let dir = scratch_dir("discover_order");
+        let dir = test_server::scratch_dir("discover_order");
         let names = [
             "m.csv", "b.csv", "z.xlsx", "a.csv", "q.xls", "c.csv", "y.csv", "d.csv",
         ];
@@ -515,16 +516,9 @@ mod tests {
         assert!(message.contains("/nonexistent/halo"), "{message}");
     }
 
-    fn scratch_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("halo_{name}_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
     #[test]
     fn cached_ids_compare_as_numbers() {
-        let dir = scratch_dir("cache_numbers");
+        let dir = test_server::scratch_dir("cache_numbers");
         std::fs::write(
             dir.join(RESOURCE_CACHE_FILE_NAME),
             r#"[{"resource_id":"r","action_ids":["0042"," 7 ","abc"]}]"#,
@@ -548,7 +542,7 @@ mod tests {
         report: &str,
         options: SetupOptions,
     ) -> (anyhow::Result<HashSet<ActionId>>, CacheData) {
-        let dir = scratch_dir(name);
+        let dir = test_server::scratch_dir(name);
         std::fs::write(
             dir.join(RESOURCE_CACHE_FILE_NAME),
             format!(r#"[{{"resource_id":"{report}","action_ids":["1"]}}]"#),
@@ -559,7 +553,7 @@ mod tests {
 
         let result = tokio::time::timeout(
             Duration::from_secs(5),
-            setup_auth_and_existing_ids(&config(server.base_url()), options, &cache),
+            setup_auth_and_existing_ids(&test_server::config(server.base_url()), options, &cache),
         )
         .await
         .expect("setup hung")
@@ -587,7 +581,10 @@ mod tests {
         .await;
 
         assert_eq!(result.unwrap(), ids(&[1, 5]));
-        assert_eq!(lines(&server.requests()), ["POST /auth/token HTTP/1.1"]);
+        assert_eq!(
+            test_server::lines(&server.requests()),
+            ["POST /auth/token HTTP/1.1"]
+        );
     }
 
     #[tokio::test]
@@ -608,7 +605,7 @@ mod tests {
         assert_eq!(result.unwrap(), ids(&[1, 2, 3, 5]));
         assert_eq!(cached.action_ids, ids(&[1, 2, 3, 5]));
         assert_eq!(
-            lines(&server.requests()),
+            test_server::lines(&server.requests()),
             [
                 "POST /auth/token HTTP/1.1",
                 "GET /api/ReportData/aaa HTTP/1.1"
@@ -619,10 +616,10 @@ mod tests {
     #[tokio::test]
     async fn a_default_run_with_an_empty_cache_refuses_before_asking_halo_anything() {
         let server = TestServer::start(vec![TOKEN]).await;
-        let dir = scratch_dir("setup_empty_refused");
+        let dir = test_server::scratch_dir("setup_empty_refused");
 
         let result = setup_auth_and_existing_ids(
-            &config(server.base_url()),
+            &test_server::config(server.base_url()),
             SetupOptions::default(),
             &Cache::new(&dir),
         )
@@ -638,10 +635,10 @@ mod tests {
     #[tokio::test]
     async fn a_sync_without_report_ids_refuses_before_asking_halo_anything() {
         let server = TestServer::start(vec![TOKEN]).await;
-        let dir = scratch_dir("setup_sync_no_reports");
+        let dir = test_server::scratch_dir("setup_sync_no_reports");
         let config = Config {
             action_ids_resource_uuids: Vec::new(),
-            ..config(server.base_url())
+            ..test_server::config(server.base_url())
         };
         let options = SetupOptions {
             sync_from_halo: true,
@@ -659,15 +656,18 @@ mod tests {
     #[tokio::test]
     async fn a_fresh_run_starts_from_an_empty_cache() {
         let server = TestServer::start(vec![TOKEN]).await;
-        let dir = scratch_dir("setup_fresh");
+        let dir = test_server::scratch_dir("setup_fresh");
         let options = SetupOptions {
             fresh: true,
             ..SetupOptions::default()
         };
 
-        let result =
-            setup_auth_and_existing_ids(&config(server.base_url()), options, &Cache::new(&dir))
-                .await;
+        let result = setup_auth_and_existing_ids(
+            &test_server::config(server.base_url()),
+            options,
+            &Cache::new(&dir),
+        )
+        .await;
 
         std::fs::remove_dir_all(&dir).unwrap();
         assert!(result.unwrap().1.is_empty());
@@ -675,7 +675,7 @@ mod tests {
 
     #[test]
     fn a_torn_last_line_in_the_imported_cache_is_left_out() {
-        let dir = scratch_dir("cache_torn");
+        let dir = test_server::scratch_dir("cache_torn");
         std::fs::write(dir.join(IMPORTED_CACHE_FILE_NAME), "1\n2\n12").unwrap();
 
         let cache = Cache::new(&dir).read().unwrap();
@@ -686,7 +686,7 @@ mod tests {
 
     #[test]
     fn recorded_ids_are_read_back_after_what_was_there() {
-        let dir = scratch_dir("cache_record");
+        let dir = test_server::scratch_dir("cache_record");
         let cache = Cache::new(&dir);
 
         cache.record_imported(&["1".to_string()]).unwrap();
@@ -703,7 +703,7 @@ mod tests {
 
     #[test]
     fn appending_to_the_resource_cache_merges_ids_as_numbers() {
-        let dir = scratch_dir("cache_merge");
+        let dir = test_server::scratch_dir("cache_merge");
         std::fs::write(
             dir.join(RESOURCE_CACHE_FILE_NAME),
             r#"[{"resource_id":"r","action_ids":["0042","9"]}]"#,
@@ -722,7 +722,7 @@ mod tests {
 
     #[test]
     fn appending_to_a_corrupt_resource_cache_names_the_file_and_leaves_it_alone() {
-        let dir = scratch_dir("cache_corrupt_append");
+        let dir = test_server::scratch_dir("cache_corrupt_append");
         let path = dir.join(RESOURCE_CACHE_FILE_NAME);
         std::fs::write(&path, "[{ not json").unwrap();
 
@@ -740,7 +740,7 @@ mod tests {
     fn the_resource_cache_is_replaced_whole_rather_than_rewritten_in_place() {
         use std::os::unix::fs::MetadataExt;
 
-        let dir = scratch_dir("cache_rename");
+        let dir = test_server::scratch_dir("cache_rename");
         let path = dir.join(RESOURCE_CACHE_FILE_NAME);
         std::fs::write(&path, "[]").unwrap();
         let before = std::fs::metadata(&path).unwrap().ino();
@@ -762,7 +762,7 @@ mod tests {
 
     #[test]
     fn a_corrupt_resource_cache_is_an_error_naming_the_file() {
-        let dir = scratch_dir("cache_corrupt_read");
+        let dir = test_server::scratch_dir("cache_corrupt_read");
         std::fs::write(dir.join(RESOURCE_CACHE_FILE_NAME), "[{ not json").unwrap();
 
         let result = Cache::new(&dir).read();

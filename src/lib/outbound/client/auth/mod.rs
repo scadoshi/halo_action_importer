@@ -172,11 +172,12 @@ impl AuthClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_server::{CLIENT_SECRET as SECRET, Reply, TestServer, config};
+    use crate::test_server;
+    use crate::test_server::{CLIENT_SECRET as SECRET, Reply, TestServer};
 
     #[test]
     fn debug_output_redacts_the_client_secret() {
-        let config = config("https://halo.example.com/");
+        let config = test_server::config("https://halo.example.com/");
         let config_debug = format!("{config:?}");
         let client_debug = format!("{:?}", AuthClient::new(config).unwrap());
         for debug in [config_debug, client_debug] {
@@ -192,7 +193,7 @@ mod tests {
             r#"{"access_token":"tok-abcdef123456","shape":"unexpected"}"#,
         )])
         .await;
-        let client = AuthClient::new(config(server.base_url())).unwrap();
+        let client = AuthClient::new(test_server::config(server.base_url())).unwrap();
 
         let result = client.fetch_token().await;
         let request = server.wait_for(1).await.remove(0);
@@ -213,7 +214,7 @@ mod tests {
             r#"{"access_token":"tok","token_type":"Bearer","expires_in":9223372036854775807}"#,
         )])
         .await;
-        let client = AuthClient::new(config(server.base_url())).unwrap();
+        let client = AuthClient::new(test_server::config(server.base_url())).unwrap();
 
         let result = client.fetch_token().await;
         let message = format!("{:#}", result.unwrap_err());

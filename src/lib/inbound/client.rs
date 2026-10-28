@@ -8,8 +8,8 @@ use serde::Deserialize;
 use tracing::{error, info, warn};
 
 use crate::config::Config;
-use crate::domain::importer::format::format_number;
-use crate::domain::importer::setup::{Cache, parse_action_ids};
+use crate::domain::importer::setup::Cache;
+use crate::domain::importer::{format, setup};
 use crate::domain::models::action_object::ActionId;
 use crate::outbound::client;
 use crate::outbound::client::auth::AuthClient;
@@ -88,7 +88,7 @@ impl ReportClient {
                 anyhow::bail!("Report response is empty");
             }
 
-            let report_ids = parse_action_ids(
+            let report_ids = setup::parse_action_ids(
                 report_data.iter().flat_map(|row| row.action_ids.split(',')),
                 &format!("report {uuid}"),
             );
@@ -102,15 +102,15 @@ impl ReportClient {
                 "Report {}/{} complete: {} IDs from {}, {} total new IDs",
                 idx + 1,
                 to_fetch.len(),
-                format_number(report_ids.len()),
+                format::format_number(report_ids.len()),
                 uuid,
-                format_number(all_existing_ids.len())
+                format::format_number(all_existing_ids.len())
             );
         }
 
         info!(
             "Completed fetching reports: {} new action IDs from {} resource(s)",
-            format_number(all_existing_ids.len()),
+            format::format_number(all_existing_ids.len()),
             to_fetch.len()
         );
         Ok(all_existing_ids)
@@ -216,7 +216,8 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::test_server::{Reply, SHORT_TIMEOUT, TOKEN, TestServer, config, lines, scratch_dir};
+    use crate::test_server;
+    use crate::test_server::{Reply, SHORT_TIMEOUT, TOKEN, TestServer};
 
     /// How long a test lets a fetch run before calling it hung.
     const HUNG: Duration = Duration::from_secs(5);
@@ -226,7 +227,7 @@ mod tests {
     const REPORT: Reply = Reply::Json(200, r#"[{"group_num":"1","action_ids":"1,2,3"}]"#);
 
     fn client(server: &TestServer) -> ReportClient {
-        let config = config(server.base_url());
+        let config = test_server::config(server.base_url());
         let auth_client = Arc::new(AuthClient::new(config.clone()).unwrap());
         ReportClient::new(config, auth_client)
             .unwrap()
@@ -235,7 +236,7 @@ mod tests {
 
     /// Fetches every report into a scratch cache named `name`.
     async fn fetch(server: &TestServer, name: &str) -> anyhow::Result<HashSet<ActionId>> {
-        let dir = scratch_dir(name);
+        let dir = test_server::scratch_dir(name);
         let cache = Cache::new(&dir);
         let result = tokio::time::timeout(HUNG, client(server).fetch_existing_action_ids(&cache))
             .await
@@ -256,7 +257,7 @@ mod tests {
 
         assert_eq!(result.unwrap(), ids(&[1, 2, 3]));
         assert_eq!(
-            lines(&server.requests()),
+            test_server::lines(&server.requests()),
             [POST_TOKEN, GET_REPORT, POST_TOKEN, GET_REPORT]
         );
     }
@@ -276,7 +277,7 @@ mod tests {
         let message = format!("{:#}", result.unwrap_err());
         assert!(message.contains("401"), "{message}");
         assert_eq!(
-            lines(&server.requests()),
+            test_server::lines(&server.requests()),
             [POST_TOKEN, GET_REPORT, POST_TOKEN, GET_REPORT]
         );
     }
@@ -296,7 +297,7 @@ mod tests {
         let message = format!("{:#}", result.unwrap_err());
         assert!(message.contains("504"), "{message}");
         assert_eq!(
-            lines(&server.requests()),
+            test_server::lines(&server.requests()),
             [POST_TOKEN, GET_REPORT, GET_REPORT, GET_REPORT]
         );
     }
@@ -305,8 +306,8 @@ mod tests {
     async fn a_report_answered_504_is_asked_again_after_the_backoff() {
         let server = TestServer::start(vec![TOKEN, Reply::Json(504, "{}"), REPORT]).await;
         let backoff = Duration::from_millis(300);
-        let dir = scratch_dir("report_504_backoff");
-        let config = config(server.base_url());
+        let dir = test_server::scratch_dir("report_504_backoff");
+        let config = test_server::config(server.base_url());
         let auth_client = Arc::new(AuthClient::new(config.clone()).unwrap());
         let client = ReportClient::new(config, auth_client)
             .unwrap()
@@ -320,7 +321,7 @@ mod tests {
         assert_eq!(result.unwrap(), ids(&[1, 2, 3]));
         assert!(elapsed >= backoff, "{elapsed:?}");
         assert_eq!(
-            lines(&server.requests()),
+            test_server::lines(&server.requests()),
             [POST_TOKEN, GET_REPORT, GET_REPORT]
         );
     }
@@ -333,7 +334,7 @@ mod tests {
 
         assert_eq!(result.unwrap(), ids(&[1, 2, 3]));
         assert_eq!(
-            lines(&server.requests()),
+            test_server::lines(&server.requests()),
             [POST_TOKEN, GET_REPORT, GET_REPORT]
         );
     }
@@ -341,8 +342,8 @@ mod tests {
     #[tokio::test]
     async fn a_report_that_times_out_is_asked_again() {
         let server = TestServer::start(vec![TOKEN, Reply::Stall, REPORT]).await;
-        let dir = scratch_dir("report_timeout");
-        let config = config(server.base_url());
+        let dir = test_server::scratch_dir("report_timeout");
+        let config = test_server::config(server.base_url());
         let auth_client = Arc::new(AuthClient::new(config.clone()).unwrap());
         let client = ReportClient::with_request_timeout(config, auth_client, SHORT_TIMEOUT)
             .unwrap()
@@ -356,7 +357,7 @@ mod tests {
 
         assert_eq!(result.unwrap(), ids(&[1, 2, 3]));
         assert_eq!(
-            lines(&server.requests()),
+            test_server::lines(&server.requests()),
             [POST_TOKEN, GET_REPORT, GET_REPORT]
         );
     }
@@ -369,7 +370,10 @@ mod tests {
 
         let message = format!("{:#}", result.unwrap_err());
         assert!(message.contains("parse report response"), "{message}");
-        assert_eq!(lines(&server.requests()), [POST_TOKEN, GET_REPORT]);
+        assert_eq!(
+            test_server::lines(&server.requests()),
+            [POST_TOKEN, GET_REPORT]
+        );
     }
 
     #[tokio::test]
@@ -380,13 +384,16 @@ mod tests {
 
         let message = format!("{:#}", result.unwrap_err());
         assert!(message.contains("500"), "{message}");
-        assert_eq!(lines(&server.requests()), [POST_TOKEN, GET_REPORT]);
+        assert_eq!(
+            test_server::lines(&server.requests()),
+            [POST_TOKEN, GET_REPORT]
+        );
     }
 
     #[tokio::test]
     async fn fetched_report_ids_are_merged_into_the_cache() {
         let server = TestServer::start(vec![TOKEN, REPORT]).await;
-        let dir = scratch_dir("report_cached");
+        let dir = test_server::scratch_dir("report_cached");
         let cache = Cache::new(&dir);
 
         client(&server)
