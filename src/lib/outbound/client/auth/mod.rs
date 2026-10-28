@@ -55,7 +55,9 @@ impl AuthClient {
         }
     }
 
-    pub async fn get_valid_token(&self) -> anyhow::Result<String> {
+    /// The `Authorization` header value for the current token, fetching a new
+    /// token first when there is none or it is about to expire.
+    pub async fn fetch_token(&self) -> anyhow::Result<String> {
         let mut token_guard = self.current_token.lock().await;
 
         if let Some(token) = token_guard.as_ref()
@@ -68,6 +70,16 @@ impl AuthClient {
         let header_value = new_token.header_value();
         *token_guard = Some(new_token);
 
+        Ok(header_value)
+    }
+
+    /// Fetches a new token whatever the state of the current one, for a
+    /// request Halo answered 401, and returns its `Authorization` header value.
+    pub async fn refresh_token(&self) -> anyhow::Result<String> {
+        let mut token_guard = self.current_token.lock().await;
+        let new_token = self.fetch_new_token().await?;
+        let header_value = new_token.header_value();
+        *token_guard = Some(new_token);
         Ok(header_value)
     }
 
@@ -156,25 +168,7 @@ impl AuthClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_server::{serve_once, served};
-
-    const SECRET: &str = "client-secret-value";
-
-    fn config(base_url: &str) -> Config {
-        let vars = [
-            ("BASE_RESOURCE_URL", base_url),
-            ("CLIENT_ID", "client-id"),
-            ("CLIENT_SECRET", SECRET),
-            ("ACTION_IDS_RESOURCE_PATHS", "aaa"),
-            ("ACTION_ID_CUSTOM_FIELD", "cfactionid"),
-        ];
-        Config::from_lookup(|key| {
-            vars.iter()
-                .find(|(k, _)| *k == key)
-                .map(|(_, v)| (*v).to_string())
-        })
-        .unwrap()
-    }
+    use crate::test_server::{CLIENT_SECRET as SECRET, Reply, TestServer, config};
 
     #[test]
     fn debug_output_redacts_the_client_secret() {
@@ -189,15 +183,15 @@ mod tests {
 
     #[tokio::test]
     async fn a_token_response_of_an_unexpected_shape_keeps_its_body_out_of_the_error() {
-        let (base_url, server) = serve_once(
+        let server = TestServer::start(vec![Reply::Json(
             200,
             r#"{"access_token":"tok-abcdef123456","shape":"unexpected"}"#,
-        )
+        )])
         .await;
-        let client = AuthClient::new(config(&base_url));
+        let client = AuthClient::new(config(server.base_url()));
 
-        let result = client.get_valid_token().await;
-        let request = served(server).await;
+        let result = client.fetch_token().await;
+        let request = server.wait_for(1).await.remove(0);
         let message = format!("{:#}", result.unwrap_err());
         assert!(
             request.line.starts_with("POST /auth/token"),
@@ -210,15 +204,14 @@ mod tests {
 
     #[tokio::test]
     async fn an_expiry_too_far_out_to_represent_is_an_error_not_a_panic() {
-        let (base_url, server) = serve_once(
+        let server = TestServer::start(vec![Reply::Json(
             200,
             r#"{"access_token":"tok","token_type":"Bearer","expires_in":9223372036854775807}"#,
-        )
+        )])
         .await;
-        let client = AuthClient::new(config(&base_url));
+        let client = AuthClient::new(config(server.base_url()));
 
-        let result = client.get_valid_token().await;
-        served(server).await;
+        let result = client.fetch_token().await;
         let message = format!("{:#}", result.unwrap_err());
         assert!(message.contains("expires_in"), "{message}");
     }

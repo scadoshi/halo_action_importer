@@ -330,7 +330,7 @@ pub async fn setup_auth_and_existing_ids(
 
     let auth_client = Arc::new(AuthClient::new(config.clone()));
     let _token = auth_client
-        .get_valid_token()
+        .fetch_token()
         .await
         .context("Failed to authenticate with Halo API")?;
     info!("Authentication successful");

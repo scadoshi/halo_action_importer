@@ -69,9 +69,11 @@ impl ReportClient {
 
             let mut auth_token = self
                 .auth_client
-                .get_valid_token()
+                .fetch_token()
                 .await
                 .context("Failed to get valid authentication token")?;
+            // A 401 gets one new token and one more try; a second 401 is an error.
+            let mut refreshed = false;
 
             loop {
                 let response = match self
@@ -91,7 +93,7 @@ impl ReportClient {
                             uuid,
                             e
                         );
-                        auth_token = self.auth_client.get_valid_token().await.context(
+                        auth_token = self.auth_client.fetch_token().await.context(
                             "Failed to refresh authentication token after network error",
                         )?;
                         continue;
@@ -108,21 +110,22 @@ impl ReportClient {
                     );
                     auth_token = self
                         .auth_client
-                        .get_valid_token()
+                        .fetch_token()
                         .await
                         .context("Failed to refresh authentication token after 504")?;
                     continue;
                 }
 
-                if status == reqwest::StatusCode::UNAUTHORIZED {
+                if status == reqwest::StatusCode::UNAUTHORIZED && !refreshed {
                     warn!(
                         "Received 401 Unauthorized for report request, refreshing token and retrying"
                     );
                     auth_token = self
                         .auth_client
-                        .get_valid_token()
+                        .refresh_token()
                         .await
                         .context("Failed to refresh authentication token after 401")?;
+                    refreshed = true;
                     continue;
                 }
 
@@ -187,5 +190,77 @@ impl ReportClient {
             to_fetch.len()
         );
         Ok(all_existing_ids)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+    use crate::test_server::{Reply, TOKEN, TestServer, config, lines, scratch_dir};
+
+    /// How long a test lets a fetch run before calling it hung.
+    const HUNG: Duration = Duration::from_secs(5);
+
+    const POST_TOKEN: &str = "POST /auth/token HTTP/1.1";
+    const GET_REPORT: &str = "GET /api/ReportData/aaa HTTP/1.1";
+    const REPORT: Reply = Reply::Json(200, r#"[{"group_num":"1","action_ids":"1,2,3"}]"#);
+
+    fn client(server: &TestServer) -> ReportClient {
+        let config = config(server.base_url());
+        let auth_client = Arc::new(AuthClient::new(config.clone()));
+        ReportClient::new(config, auth_client)
+    }
+
+    /// Fetches every report into a scratch cache named `name`.
+    async fn fetch(server: &TestServer, name: &str) -> anyhow::Result<HashSet<ActionId>> {
+        let dir = scratch_dir(name);
+        let cache = Cache::new(&dir);
+        let result = tokio::time::timeout(
+            HUNG,
+            client(server).get_existing_action_ids(&cache, &HashSet::new()),
+        )
+        .await
+        .expect("the report fetch hung");
+        std::fs::remove_dir_all(&dir).unwrap();
+        result
+    }
+
+    fn ids(ids: &[u64]) -> HashSet<ActionId> {
+        ids.iter().copied().map(ActionId::new).collect()
+    }
+
+    #[tokio::test]
+    async fn a_report_answered_401_fetches_a_new_token_and_asks_again() {
+        let server = TestServer::start(vec![TOKEN, Reply::Json(401, "{}"), TOKEN, REPORT]).await;
+
+        let result = fetch(&server, "report_401_once").await;
+
+        assert_eq!(result.unwrap(), ids(&[1, 2, 3]));
+        assert_eq!(
+            lines(&server.requests()),
+            [POST_TOKEN, GET_REPORT, POST_TOKEN, GET_REPORT]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_report_answered_401_twice_is_an_error() {
+        let server = TestServer::start(vec![
+            TOKEN,
+            Reply::Json(401, "{}"),
+            TOKEN,
+            Reply::Json(401, "{}"),
+        ])
+        .await;
+
+        let result = fetch(&server, "report_401_twice").await;
+
+        let message = format!("{:#}", result.unwrap_err());
+        assert!(message.contains("401"), "{message}");
+        assert_eq!(
+            lines(&server.requests()),
+            [POST_TOKEN, GET_REPORT, POST_TOKEN, GET_REPORT]
+        );
     }
 }
