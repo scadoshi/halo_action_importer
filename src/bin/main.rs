@@ -1,4 +1,5 @@
 use std::ffi::OsStr;
+use std::process::ExitCode;
 use std::time::Instant;
 
 use anyhow::Context;
@@ -7,13 +8,13 @@ use halo_action_importer::cli::Cli;
 use halo_action_importer::config::Config;
 use halo_action_importer::domain::importer::format::format_number;
 use halo_action_importer::domain::importer::{
-    FailedAction, ImportSummary, SetupOptions, SetupResult, log_summary, process_csv_file,
-    process_excel_file, setup, write_retry_csv, write_summary_json,
+    FailedAction, ImportSummary, SetupOptions, SetupResult, exit_code, log_summary,
+    process_csv_file, process_excel_file, setup, write_retry_csv, write_summary_json,
 };
 use tracing::{error, info};
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> anyhow::Result<ExitCode> {
     let Cli {
         only_parse,
         cache_only,
@@ -118,18 +119,17 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let total_runtime = start_time.elapsed().as_secs_f64();
-    log_summary(
-        ImportSummary {
-            total_processed: total_actions_processed,
-            total_imported: total_actions_imported,
-            total_skipped: total_actions_skipped,
-            total_failed: failed_imports.len(),
-            skipped_files: skipped_files.clone(),
-            total_runtime_secs: total_runtime,
-            sheet_times: sheet_times.clone(),
-        },
-        only_parse,
-    );
+    let summary = ImportSummary {
+        total_processed: total_actions_processed,
+        total_imported: total_actions_imported,
+        total_skipped: total_actions_skipped,
+        total_failed: failed_imports.len(),
+        skipped_files: skipped_files.clone(),
+        total_runtime_secs: total_runtime,
+        sheet_times: sheet_times.clone(),
+    };
+    let code = exit_code(&summary);
+    log_summary(summary, only_parse);
 
     // Write retry.csv and summary.json
     if !failed_imports.is_empty() {
@@ -147,5 +147,5 @@ async fn main() -> anyhow::Result<()> {
         total_sheets,
     )?;
 
-    Ok(())
+    Ok(ExitCode::from(code))
 }

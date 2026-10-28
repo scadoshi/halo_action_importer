@@ -12,6 +12,16 @@ pub struct ImportSummary {
     pub sheet_times: Vec<f64>,
 }
 
+/// The process exit code for a run: 1 when any action failed or any file
+/// could not be read, 0 otherwise.
+pub fn exit_code(summary: &ImportSummary) -> u8 {
+    if summary.total_failed > 0 || !summary.skipped_files.is_empty() {
+        1
+    } else {
+        0
+    }
+}
+
 pub fn log_summary(summary: ImportSummary, only_parse: bool) {
     info!("=== Import Summary ===");
     info!(
@@ -68,5 +78,29 @@ pub fn log_summary(summary: ImportSummary, only_parse: bool) {
         if !summary.sheet_times.is_empty() {
             info!("Average time per sheet: {:.2}s", avg_sheet_time);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn summary(total_failed: usize, skipped_files: &[&str]) -> ImportSummary {
+        ImportSummary {
+            total_processed: 10,
+            total_imported: 10 - total_failed,
+            total_skipped: 0,
+            total_failed,
+            skipped_files: skipped_files.iter().map(|f| (*f).to_string()).collect(),
+            total_runtime_secs: 1.0,
+            sheet_times: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_run_exits_one_when_an_action_failed_or_a_file_could_not_be_read() {
+        assert_eq!(exit_code(&summary(0, &[])), 0);
+        assert_eq!(exit_code(&summary(1, &[])), 1);
+        assert_eq!(exit_code(&summary(0, &["a.csv: unreadable"])), 1);
     }
 }

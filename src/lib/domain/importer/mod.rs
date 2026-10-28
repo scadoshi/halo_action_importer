@@ -10,4 +10,4 @@ pub use processor::{
 pub use setup::{
     SetupOptions, SetupResult, append_imported_ids_to_cache, append_resource_to_cache, setup,
 };
-pub use summary::{ImportSummary, log_summary};
+pub use summary::{ImportSummary, exit_code, log_summary};
