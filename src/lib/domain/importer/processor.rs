@@ -10,7 +10,7 @@ use tracing::{error, info, warn};
 
 use super::format::{format_duration, format_eta, format_number};
 use crate::domain::importer::setup::append_imported_ids_to_cache;
-use crate::domain::models::action_object::ActionObject;
+use crate::domain::models::action_object::{ActionId, ActionObject};
 use crate::inbound::file::Reader;
 use crate::inbound::file::csv::Csv;
 use crate::inbound::file::excel::Excel;
@@ -29,7 +29,7 @@ pub struct ProcessingStats {
 }
 
 struct ProcessConfig<'a> {
-    existing_ids: &'a HashSet<String>,
+    existing_ids: &'a HashSet<ActionId>,
     action_client: Option<&'a ActionClient>,
     sheet_times: &'a mut Vec<f64>,
     file_name: &'a str,
@@ -155,7 +155,7 @@ async fn retry_by_ticket_groups(
 #[allow(clippy::too_many_arguments)]
 pub async fn process_csv_file(
     file_path: &Path,
-    existing_ids: &HashSet<String>,
+    existing_ids: &HashSet<ActionId>,
     action_client: Option<&ActionClient>,
     sheet_times: &mut Vec<f64>,
     file_name: &str,
@@ -223,7 +223,7 @@ pub async fn process_csv_file(
             }
         };
         processed += 1;
-        let action_id = action.action_id().to_string();
+        let action_id = action.action_id();
         let ticket_id = action.ticket_id;
         if config.only_parse {
             if config.existing_ids.contains(&action_id) {
@@ -648,7 +648,7 @@ pub async fn process_csv_file(
 #[allow(clippy::too_many_arguments)]
 pub async fn process_excel_file(
     file_path: &Path,
-    existing_ids: &HashSet<String>,
+    existing_ids: &HashSet<ActionId>,
     action_client: Option<&ActionClient>,
     sheet_times: &mut Vec<f64>,
     sheet_number: usize,
@@ -713,7 +713,7 @@ pub async fn process_excel_file(
             }
         };
         processed += 1;
-        let action_id = action.action_id().to_string();
+        let action_id = action.action_id();
         let ticket_id = action.ticket_id;
         if config.only_parse {
             if config.existing_ids.contains(&action_id) {
@@ -1303,7 +1303,6 @@ pub fn write_summary_json(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::models::action_object::ActionId;
 
     #[test]
     fn errors_are_classified_by_what_the_message_says() {
@@ -1335,7 +1334,7 @@ mod tests {
             .and_hms_opt(10, 0, 0)
             .unwrap();
         let failed = vec![FailedAction {
-            action: ActionObject::new(7, Some(date), None, "a, note", "who", ActionId::new("99")),
+            action: ActionObject::new(7, Some(date), None, "a, note", "who", ActionId::new(99)),
             error_type: "Server error".to_string(),
         }];
 

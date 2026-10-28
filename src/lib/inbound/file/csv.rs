@@ -86,6 +86,7 @@ impl Csv for Reader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::models::action_object::ActionId;
 
     fn write(name: &str, csv: &str) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!("halo_{}_{name}", std::process::id()));
@@ -107,7 +108,7 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
 
         assert_eq!(actions[0].ticket_id, 10);
-        assert_eq!(actions[0].action_id(), "500");
+        assert_eq!(actions[0].action_id(), ActionId::new(500));
         assert_eq!(actions[0].outcome, "Imported Note");
         assert_eq!(
             actions[0].actiondate.unwrap().to_string(),
@@ -149,5 +150,32 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         assert!(message.contains("row 2"), "{message}");
         assert!(message.contains("bad.csv"), "{message}");
+    }
+
+    #[test]
+    fn an_action_id_that_is_not_a_number_is_a_row_error() {
+        let path = write(
+            "bad_id.csv",
+            "ticket_id,actionId,actionwho,note,actiondate\n\
+             1,abc,w,n,\n",
+        );
+        let message = Reader::try_csv_to_action_objects(&path)
+            .unwrap_err()
+            .to_string();
+        std::fs::remove_file(&path).unwrap();
+        assert!(message.contains("row 1"), "{message}");
+        assert!(message.contains("abc"), "{message}");
+    }
+
+    #[test]
+    fn an_action_id_is_read_as_a_trimmed_number() {
+        let path = write(
+            "padded_id.csv",
+            "ticket_id,actionId,actionwho,note,actiondate\n\
+             1, 0042 ,w,n,\n",
+        );
+        let actions = Reader::try_csv_to_action_objects(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(actions[0].action_id().to_string(), "42");
     }
 }

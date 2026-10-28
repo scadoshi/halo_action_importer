@@ -1,42 +1,47 @@
 use chrono::{FixedOffset, NaiveDateTime, TimeZone};
-use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-#[derive(Debug, Clone)]
-pub struct ActionId(String);
+/// The action's unique ID, the number Halo keeps in the action ID custom field.
+///
+/// Parsed once from text, trimmed, so ids from files, the cache and the reports
+/// compare as numbers: `0042` and `42` are the same action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
+#[serde(try_from = "String")]
+pub struct ActionId(u64);
 
 impl ActionId {
-    pub fn value(&self) -> &str {
-        &self.0
+    pub fn new(id: u64) -> Self {
+        Self(id)
     }
 
-    pub fn new(id: impl Into<String>) -> Self {
-        Self(id.into())
-    }
-}
-
-impl Serialize for ActionId {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let object = serde_json::json!({
-            "name": "cfactionid",
-            "value": self.value()
-        });
-        let mut seq = serializer.serialize_seq(Some(1))?;
-        seq.serialize_element(&object)?;
-        seq.end()
+    pub fn value(self) -> u64 {
+        self.0
     }
 }
 
-impl<'de> Deserialize<'de> for ActionId {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        Ok(Self(s))
+impl std::str::FromStr for ActionId {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let trimmed = s.trim();
+        trimmed
+            .parse()
+            .map(Self)
+            .map_err(|_| anyhow::anyhow!("action id '{trimmed}' is not a whole number"))
+    }
+}
+
+impl TryFrom<String> for ActionId {
+    type Error = anyhow::Error;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
+    }
+}
+
+impl std::fmt::Display for ActionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
     }
 }
 
@@ -170,7 +175,7 @@ impl Serialize for ActionObject {
 
         map.serialize_entry("actionwho", &self.actionwho)?;
 
-        let cfactionid: u32 = self.action_id.value().parse().unwrap_or(0);
+        let cfactionid = self.action_id.value();
         map.serialize_entry("cfactionid", &cfactionid)?;
 
         let customfields = vec![serde_json::json!({
@@ -212,8 +217,8 @@ impl ActionObject {
         }
     }
 
-    pub fn action_id(&self) -> &str {
-        self.action_id.value()
+    pub fn action_id(&self) -> ActionId {
+        self.action_id
     }
 }
 
@@ -226,7 +231,7 @@ mod tests {
     #[test]
     fn serializes_to_the_shape_the_import_endpoint_takes() {
         let action_object =
-            ActionObject::new(123, None, None, "testing..", "tester", ActionId::new("456"));
+            ActionObject::new(123, None, None, "testing..", "tester", ActionId::new(456));
         let serialized: serde_json::Value = serde_json::to_value(&action_object).unwrap();
         assert_eq!(
             serialized,
@@ -253,15 +258,20 @@ mod tests {
             .unwrap()
             .and_hms_opt(10, 0, 0)
             .unwrap();
-        let action_object = ActionObject::new(1, Some(local), None, "n", "w", ActionId::new("1"));
+        let action_object = ActionObject::new(1, Some(local), None, "n", "w", ActionId::new(1));
         let serialized: serde_json::Value = serde_json::to_value(&action_object).unwrap();
         assert_eq!(serialized["datetime"], "2026-01-15T17:00:00.000Z");
     }
 
     #[test]
-    fn an_action_id_that_is_not_a_number_is_sent_as_zero() {
-        let action_object = ActionObject::new(1, None, None, "n", "w", ActionId::new("abc"));
-        let serialized: serde_json::Value = serde_json::to_value(&action_object).unwrap();
-        assert_eq!(serialized["cfactionid"], 0);
+    fn an_action_id_that_is_not_a_number_does_not_deserialize() {
+        let row = |id: &str| {
+            serde_json::json!({
+                "ticket_id": 1, "note": "n", "actionwho": "w", "action_id": id, "actiondate": null
+            })
+        };
+        assert!(serde_json::from_value::<ActionObject>(row("abc")).is_err());
+        assert!(serde_json::from_value::<ActionObject>(row("")).is_err());
+        assert!(serde_json::from_value::<ActionObject>(row("12")).is_ok());
     }
 }

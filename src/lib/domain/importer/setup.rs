@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::ffi::OsStr;
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -9,7 +9,7 @@ use anyhow::Context;
 use chrono::Utc;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::Registry;
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::layer::SubscriberExt;
@@ -17,6 +17,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 use super::format::format_number;
 use crate::config::Config;
+use crate::domain::models::action_object::ActionId;
 use crate::inbound::client::ReportClient;
 use crate::outbound::client::action::ActionClient;
 use crate::outbound::client::auth::AuthClient;
@@ -24,7 +25,9 @@ use crate::outbound::client::auth::AuthClient;
 const LOG_DIR: &str = "log";
 const CACHE_DIR: &str = "cache";
 const RESOURCE_CACHE_FILE: &str = "cache/existing.json";
+const RESOURCE_CACHE_FILE_NAME: &str = "existing.json";
 const IMPORTED_CACHE_FILE: &str = "cache/imported";
+const IMPORTED_CACHE_FILE_NAME: &str = "imported";
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ResourceCache {
@@ -33,42 +36,72 @@ struct ResourceCache {
 }
 
 pub struct CacheData {
-    pub action_ids: HashSet<String>,
+    pub action_ids: HashSet<ActionId>,
     pub fetched_resources: HashSet<String>,
+}
+
+/// Parses ids read from `source` as numbers. An id that is not a number can
+/// never match an action, so it is left out and counted in one warning.
+pub fn parse_action_ids<'a>(ids: impl IntoIterator<Item = &'a str>, source: &str) -> Vec<ActionId> {
+    let mut parsed = Vec::new();
+    let mut rejected = 0usize;
+    for id in ids {
+        if id.trim().is_empty() {
+            continue;
+        }
+        match id.parse::<ActionId>() {
+            Ok(id) => parsed.push(id),
+            Err(_) => rejected += 1,
+        }
+    }
+    if rejected > 0 {
+        warn!(
+            "Ignored {} action ID(s) in {} that are not whole numbers",
+            format_number(rejected),
+            source
+        );
+    }
+    parsed
 }
 
 /// Read cached action IDs from both existing (JSON format) and imported (line-separated) files
 pub fn read_cached_ids() -> CacheData {
+    read_cached_ids_in(Path::new(CACHE_DIR))
+}
+
+fn read_cached_ids_in(cache_dir: &Path) -> CacheData {
     let mut action_ids = HashSet::new();
     let mut fetched_resources = HashSet::new();
 
     // Read existing cache (JSON format)
-    let existing_path = Path::new(RESOURCE_CACHE_FILE);
+    let existing_path = cache_dir.join(RESOURCE_CACHE_FILE_NAME);
     if existing_path.exists()
-        && let Ok(contents) = std::fs::read_to_string(existing_path)
+        && let Ok(contents) = std::fs::read_to_string(&existing_path)
         && !contents.trim().is_empty()
         && let Ok(resources) = serde_json::from_str::<Vec<ResourceCache>>(&contents)
     {
         for resource in resources {
+            action_ids.extend(parse_action_ids(
+                resource.action_ids.iter().map(String::as_str),
+                RESOURCE_CACHE_FILE,
+            ));
             fetched_resources.insert(resource.resource_id);
-            for id in resource.action_ids {
-                action_ids.insert(id);
-            }
         }
     }
 
-    // Read imported IDs (simple text file, one ID per line) - keep as-is
-    let txt_path = Path::new(IMPORTED_CACHE_FILE);
+    // Read imported IDs (simple text file, one ID per line)
+    let txt_path = cache_dir.join(IMPORTED_CACHE_FILE_NAME);
     if txt_path.exists()
-        && let Ok(file) = std::fs::File::open(txt_path)
+        && let Ok(file) = std::fs::File::open(&txt_path)
     {
         let reader = std::io::BufReader::new(file);
-        for id in std::io::BufRead::lines(reader).map_while(Result::ok) {
-            let id = id.trim();
-            if !id.is_empty() {
-                action_ids.insert(id.to_string());
-            }
-        }
+        let lines: Vec<String> = std::io::BufRead::lines(reader)
+            .map_while(Result::ok)
+            .collect();
+        action_ids.extend(parse_action_ids(
+            lines.iter().map(String::as_str),
+            IMPORTED_CACHE_FILE,
+        ));
     }
 
     CacheData {
@@ -78,21 +111,30 @@ pub fn read_cached_ids() -> CacheData {
 }
 
 /// Append action IDs to the existing cache file (JSON format with resource tracking)
-pub fn append_resource_to_cache(resource_id: &str, action_ids: &[String]) -> anyhow::Result<()> {
+pub fn append_resource_to_cache(resource_id: &str, action_ids: &[ActionId]) -> anyhow::Result<()> {
+    append_resource_to_cache_in(Path::new(CACHE_DIR), resource_id, action_ids)
+}
+
+fn append_resource_to_cache_in(
+    cache_dir: &Path,
+    resource_id: &str,
+    action_ids: &[ActionId],
+) -> anyhow::Result<()> {
     if action_ids.is_empty() {
         return Ok(());
     }
 
-    std::fs::create_dir_all(CACHE_DIR)
-        .with_context(|| format!("Failed to create cache directory: {}", CACHE_DIR))?;
+    std::fs::create_dir_all(cache_dir)
+        .with_context(|| format!("Failed to create cache directory: {}", cache_dir.display()))?;
 
+    let cache_path = cache_dir.join(RESOURCE_CACHE_FILE_NAME);
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
-        .open(RESOURCE_CACHE_FILE)
-        .with_context(|| format!("Failed to open cache file: {}", RESOURCE_CACHE_FILE))?;
+        .open(&cache_path)
+        .with_context(|| format!("Failed to open cache file: {}", cache_path.display()))?;
 
     file.lock_exclusive()
         .with_context(|| "Failed to acquire exclusive lock on cache file")?;
@@ -107,22 +149,31 @@ pub fn append_resource_to_cache(resource_id: &str, action_ids: &[String]) -> any
         serde_json::from_str(&contents).unwrap_or_else(|_| Vec::new())
     };
 
-    // Find existing resource or create new one
-    if let Some(existing) = resources.iter_mut().find(|r| r.resource_id == resource_id) {
-        // Extend existing resource with new IDs (deduplicate with HashSet)
-        let mut all_ids: HashSet<String> = existing.action_ids.iter().cloned().collect();
-        all_ids.extend(action_ids.iter().cloned());
-        existing.action_ids = all_ids.into_iter().collect();
-        existing.action_ids.sort();
-    } else {
-        // Add new resource
-        let mut unique_ids: Vec<String> = action_ids.to_vec();
-        unique_ids.sort();
-        unique_ids.dedup();
-        resources.push(ResourceCache {
+    // Merge with the resource's cached IDs as numbers, so `0042` and `42` are one ID.
+    // A cached entry that is not a number is kept as it was.
+    let position = resources.iter().position(|r| r.resource_id == resource_id);
+    let existing = position
+        .and_then(|index| resources.get(index))
+        .map(|r| r.action_ids.clone())
+        .unwrap_or_default();
+    let mut numeric: BTreeSet<ActionId> = action_ids.iter().copied().collect();
+    let mut other: Vec<String> = Vec::new();
+    for id in existing {
+        match id.parse::<ActionId>() {
+            Ok(parsed) => {
+                numeric.insert(parsed);
+            }
+            Err(_) => other.push(id),
+        }
+    }
+    let mut merged: Vec<String> = numeric.iter().map(ActionId::to_string).collect();
+    merged.extend(other);
+    match position.and_then(|index| resources.get_mut(index)) {
+        Some(resource) => resource.action_ids = merged,
+        None => resources.push(ResourceCache {
             resource_id: resource_id.to_string(),
-            action_ids: unique_ids,
-        });
+            action_ids: merged,
+        }),
     }
 
     // Serialize to JSON with pretty formatting
@@ -178,7 +229,7 @@ pub struct SetupOptions {
 }
 
 pub struct SetupResult {
-    pub existing_ids: HashSet<String>,
+    pub existing_ids: HashSet<ActionId>,
     pub action_client: Option<ActionClient>,
     pub files_to_process: Vec<(PathBuf, String)>,
     pub auth_client: Option<Arc<AuthClient>>,
@@ -238,7 +289,7 @@ pub fn setup_logging(only_parse: bool, log_level: tracing::Level) -> anyhow::Res
 pub async fn setup_auth_and_existing_ids(
     config: &Config,
     options: SetupOptions,
-) -> anyhow::Result<(Option<Arc<AuthClient>>, HashSet<String>)> {
+) -> anyhow::Result<(Option<Arc<AuthClient>>, HashSet<ActionId>)> {
     let cache_data = read_cached_ids();
     info!(
         "Cache: {} existing action IDs from {} resource(s)",
@@ -377,5 +428,46 @@ mod tests {
     fn a_missing_input_directory_is_named() {
         let message = discover_files("/nonexistent/halo").unwrap_err().to_string();
         assert!(message.contains("/nonexistent/halo"), "{message}");
+    }
+
+    fn scratch_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("halo_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn cached_ids_compare_as_numbers() {
+        let dir = scratch_dir("cache_numbers");
+        std::fs::write(
+            dir.join(RESOURCE_CACHE_FILE_NAME),
+            r#"[{"resource_id":"r","action_ids":["0042"," 7 ","abc"]}]"#,
+        )
+        .unwrap();
+        std::fs::write(dir.join(IMPORTED_CACHE_FILE_NAME), "0100\n\nxyz\n").unwrap();
+
+        let cache = read_cached_ids_in(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+        let expected: HashSet<ActionId> = [42, 7, 100].into_iter().map(ActionId::new).collect();
+        assert_eq!(cache.action_ids, expected);
+        assert!(cache.fetched_resources.contains("r"));
+    }
+
+    #[test]
+    fn appending_to_the_resource_cache_merges_ids_as_numbers() {
+        let dir = scratch_dir("cache_merge");
+        std::fs::write(
+            dir.join(RESOURCE_CACHE_FILE_NAME),
+            r#"[{"resource_id":"r","action_ids":["0042","9"]}]"#,
+        )
+        .unwrap();
+
+        append_resource_to_cache_in(&dir, "r", &[ActionId::new(42), ActionId::new(10)]).unwrap();
+
+        let written = std::fs::read_to_string(dir.join(RESOURCE_CACHE_FILE_NAME)).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        let resources: Vec<ResourceCache> = serde_json::from_str(&written).unwrap();
+        assert_eq!(resources[0].action_ids, ["9", "10", "42"]);
     }
 }

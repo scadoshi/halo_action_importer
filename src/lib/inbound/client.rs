@@ -8,7 +8,8 @@ use tracing::{error, info, warn};
 
 use crate::config::Config;
 use crate::domain::importer::format::format_number;
-use crate::domain::importer::setup::append_resource_to_cache;
+use crate::domain::importer::setup::{append_resource_to_cache, parse_action_ids};
+use crate::domain::models::action_object::ActionId;
 use crate::outbound::client::auth::AuthClient;
 
 #[derive(Debug, Deserialize)]
@@ -38,7 +39,7 @@ impl ReportClient {
     pub async fn get_existing_action_ids(
         &self,
         already_fetched: &HashSet<String>,
-    ) -> anyhow::Result<HashSet<String>> {
+    ) -> anyhow::Result<HashSet<ActionId>> {
         let mut all_existing_ids = HashSet::new();
         let total_reports = self.config.action_ids_resource_uuids.len();
         let to_fetch: Vec<_> = self
@@ -157,16 +158,11 @@ impl ReportClient {
                     anyhow::bail!("Report response is empty");
                 }
 
-                let mut report_ids: Vec<String> = Vec::new();
-                for row in &report_data {
-                    for id_str in row.action_ids.split(',') {
-                        let id_str = id_str.trim();
-                        if !id_str.is_empty() {
-                            report_ids.push(id_str.to_string());
-                            all_existing_ids.insert(id_str.to_string());
-                        }
-                    }
-                }
+                let report_ids = parse_action_ids(
+                    report_data.iter().flat_map(|row| row.action_ids.split(',')),
+                    &format!("report {uuid}"),
+                );
+                all_existing_ids.extend(report_ids.iter().copied());
 
                 if let Err(e) = append_resource_to_cache(uuid, &report_ids) {
                     warn!("Failed to cache IDs from report {}: {}", uuid, e);

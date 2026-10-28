@@ -138,7 +138,7 @@ mod tests {
             None,
             "rusty note",
             "rusty who",
-            ActionId::new("897"),
+            ActionId::new(897),
         );
         let response = action_client.post_action_objects(vec![action_object]).await;
         assert!(response.is_ok());
