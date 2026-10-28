@@ -1359,6 +1359,24 @@ mod tests {
         assert_eq!(error_types(&stats[0]), [(11, "Server error")]);
     }
 
+    #[tokio::test]
+    async fn a_batch_whose_post_got_a_504_is_written_to_the_retry_csv() {
+        let server = TestServer::start(vec![TOKEN, Reply::Json(504, "{}")]).await;
+        let csv = format!("{HEADER}1,10,w,n,\n");
+        let stats = import(&server, "proc_504_retry_csv", &[("a.csv", &csv)], 1).await;
+        let dir = scratch_dir("proc_504_retry_csv_log");
+
+        write_retry_csv(dir.to_str().unwrap(), &stats[0].failed).unwrap();
+
+        let written = std::fs::read_to_string(dir.join("retry.csv")).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(lines(&server.requests()), [POST_TOKEN, POST_ACTIONS]);
+        assert!(
+            written.ends_with("1,10,,w,n,Imported Note,Gateway timeout\n"),
+            "{written}"
+        );
+    }
+
     #[test]
     fn the_retry_csv_round_trips_through_the_importer_columns() {
         let dir = std::env::temp_dir().join(format!("halo_retry_{}", std::process::id()));
