@@ -9,6 +9,7 @@ use tokio::sync::Mutex;
 use tracing::error;
 
 use crate::config::Config;
+use crate::outbound::client;
 use crate::outbound::client::auth::token::AuthToken;
 
 #[derive(Deserialize)]
@@ -47,12 +48,15 @@ impl std::fmt::Debug for AuthClient {
 }
 
 impl AuthClient {
-    pub fn new(config: Config) -> Self {
-        Self {
+    /// # Errors
+    ///
+    /// When the HTTP client cannot be built.
+    pub fn new(config: Config) -> anyhow::Result<Self> {
+        Ok(Self {
             config,
-            http_client: ReqwestClient::new(),
+            http_client: client::http_client(client::REQUEST_TIMEOUT)?,
             current_token: Arc::new(Mutex::new(None)),
-        }
+        })
     }
 
     /// The `Authorization` header value for the current token, fetching a new
@@ -174,7 +178,7 @@ mod tests {
     fn debug_output_redacts_the_client_secret() {
         let config = config("https://halo.example.com/");
         let config_debug = format!("{config:?}");
-        let client_debug = format!("{:?}", AuthClient::new(config));
+        let client_debug = format!("{:?}", AuthClient::new(config).unwrap());
         for debug in [config_debug, client_debug] {
             assert!(!debug.contains(SECRET), "{debug}");
             assert!(debug.contains("client-id"), "{debug}");
@@ -188,7 +192,7 @@ mod tests {
             r#"{"access_token":"tok-abcdef123456","shape":"unexpected"}"#,
         )])
         .await;
-        let client = AuthClient::new(config(server.base_url()));
+        let client = AuthClient::new(config(server.base_url())).unwrap();
 
         let result = client.fetch_token().await;
         let request = server.wait_for(1).await.remove(0);
@@ -209,7 +213,7 @@ mod tests {
             r#"{"access_token":"tok","token_type":"Bearer","expires_in":9223372036854775807}"#,
         )])
         .await;
-        let client = AuthClient::new(config(server.base_url()));
+        let client = AuthClient::new(config(server.base_url())).unwrap();
 
         let result = client.fetch_token().await;
         let message = format!("{:#}", result.unwrap_err());

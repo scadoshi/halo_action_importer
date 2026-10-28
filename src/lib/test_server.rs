@@ -24,6 +24,11 @@ pub(crate) struct Request {
 pub(crate) enum Reply {
     /// A JSON response with this status and body.
     Json(u16, &'static str),
+    /// Closes the connection without answering, which the client sees as a
+    /// network error.
+    Hangup,
+    /// Holds the connection open without answering, so the client times out.
+    Stall,
 }
 
 /// A request beyond the scripted replies gets this status.
@@ -103,12 +108,20 @@ async fn answer(mut socket: TcpStream, reply: Reply, recorded: Arc<Mutex<Vec<Req
         return;
     };
     recorded.lock().unwrap().push(request);
-    let Reply::Json(status, body) = reply;
-    let response = format!(
-        "HTTP/1.1 {status} Test\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    let _ = socket.write_all(response.as_bytes()).await;
+    match reply {
+        Reply::Json(status, body) => {
+            let response = format!(
+                "HTTP/1.1 {status} Test\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+        }
+        Reply::Hangup => drop(socket),
+        Reply::Stall => {
+            tokio::time::sleep(PATIENCE).await;
+            drop(socket);
+        }
+    }
 }
 
 /// Reads a request head and its body. `None` when the client closes the
@@ -147,6 +160,9 @@ async fn read_request(socket: &mut TcpStream) -> Option<Request> {
 
 /// The client secret in [`config`].
 pub(crate) const CLIENT_SECRET: &str = "client-secret-value";
+
+/// A request timeout short enough for a test to wait out.
+pub(crate) const SHORT_TIMEOUT: Duration = Duration::from_millis(200);
 
 /// A token response the auth client accepts.
 pub(crate) const TOKEN: Reply = Reply::Json(

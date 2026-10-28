@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Context;
 use reqwest::Client as ReqwestClient;
@@ -6,8 +7,13 @@ use tracing::{error, warn};
 
 use crate::config::Config;
 use crate::domain::models::action_object::ActionObject;
+use crate::outbound::client;
 use crate::outbound::client::auth::AuthClient;
 
+/// Posts actions to Halo. A post is sent once: Halo may have stored the actions
+/// even when the reply is a 504 or never arrives, so sending it again could
+/// duplicate them. The one exception is a 401, which gets a new token and one
+/// more try.
 #[derive(Debug, Clone)]
 pub struct ActionClient {
     config: Config,
@@ -16,12 +22,24 @@ pub struct ActionClient {
 }
 
 impl ActionClient {
-    pub fn new(config: Config, auth_client: Arc<AuthClient>) -> Self {
-        Self {
+    /// # Errors
+    ///
+    /// When the HTTP client cannot be built.
+    pub fn new(config: Config, auth_client: Arc<AuthClient>) -> anyhow::Result<Self> {
+        Self::with_request_timeout(config, auth_client, client::REQUEST_TIMEOUT)
+    }
+
+    /// An action client whose posts give up after `timeout`.
+    pub(crate) fn with_request_timeout(
+        config: Config,
+        auth_client: Arc<AuthClient>,
+        timeout: Duration,
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
             config,
-            http_client: ReqwestClient::new(),
+            http_client: client::http_client(timeout)?,
             auth_client,
-        }
+        })
     }
 
     pub async fn post_action_objects(
@@ -57,36 +75,11 @@ impl ActionClient {
                 .header("Content-Type", "application/json; charset=utf-8")
                 .json(&payload);
 
-            let response = match request.send().await {
-                Ok(resp) => resp,
-                Err(e) => {
-                    // Network error, timeout, or connection failure - retry indefinitely
-                    warn!(
-                        "Network error sending POST request for action IDs {:?}: {} - retrying immediately",
-                        action_ids, e
-                    );
-                    auth_token =
-                        self.auth_client.fetch_token().await.context(
-                            "Failed to refresh authentication token after network error",
-                        )?;
-                    continue;
-                }
-            };
+            let response = request.send().await.with_context(|| {
+                format!("Action object POST failed for action IDs {action_ids:?}")
+            })?;
 
             let status = response.status();
-
-            if status == reqwest::StatusCode::GATEWAY_TIMEOUT {
-                warn!(
-                    "Received 504 Gateway Timeout for action IDs {:?}, retrying immediately",
-                    action_ids
-                );
-                auth_token = self
-                    .auth_client
-                    .fetch_token()
-                    .await
-                    .context("Failed to refresh authentication token after 504")?;
-                continue;
-            }
 
             if status == reqwest::StatusCode::UNAUTHORIZED && !refreshed {
                 warn!("Received 401 Unauthorized for batch, refreshing token and retrying");
@@ -103,12 +96,6 @@ impl ActionClient {
                 let error_text: String = response
                     .text()
                     .await
-                    .with_context(|| {
-                        format!(
-                            "failed to read error response body for action IDs: {:?} (status: {})",
-                            action_ids, status
-                        )
-                    })
                     .unwrap_or_else(|_| "failed to get error response".to_string());
                 error!(
                     "Action object POST failed for batch: status {}, error: {}",
@@ -133,15 +120,15 @@ mod tests {
     use super::*;
     use crate::domain::models::action_object::ActionId;
     use crate::outbound::client::auth::AuthClient;
-    use crate::test_server::{Reply, TOKEN, TestServer, config, lines};
+    use crate::test_server::{Reply, SHORT_TIMEOUT, TOKEN, TestServer, config, lines};
 
     /// How long a test lets a post run before calling it hung.
     const HUNG: std::time::Duration = std::time::Duration::from_secs(5);
 
     fn client(server: &TestServer) -> ActionClient {
         let config = config(server.base_url());
-        let auth_client = Arc::new(AuthClient::new(config.clone()));
-        ActionClient::new(config, auth_client)
+        let auth_client = Arc::new(AuthClient::new(config.clone()).unwrap());
+        ActionClient::new(config, auth_client).unwrap()
     }
 
     fn action(ticket_id: u32, action_id: u64) -> ActionObject {
@@ -215,11 +202,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_post_answered_504_is_an_error_and_not_sent_again() {
+        let server = TestServer::start(vec![TOKEN, Reply::Json(504, "{}")]).await;
+
+        let result = tokio::time::timeout(
+            HUNG,
+            client(&server).post_action_objects(vec![action(1, 10)]),
+        )
+        .await
+        .expect("the post hung");
+
+        let message = format!("{:#}", result.unwrap_err());
+        assert!(message.contains("504"), "{message}");
+        assert_eq!(lines(&server.requests()), [POST_TOKEN, POST_ACTIONS]);
+    }
+
+    #[tokio::test]
+    async fn a_post_hit_by_a_network_error_is_an_error_and_not_sent_again() {
+        let server = TestServer::start(vec![TOKEN, Reply::Hangup]).await;
+
+        let result = tokio::time::timeout(
+            HUNG,
+            client(&server).post_action_objects(vec![action(1, 10)]),
+        )
+        .await
+        .expect("the post hung");
+
+        assert!(result.is_err());
+        assert_eq!(lines(&server.requests()), [POST_TOKEN, POST_ACTIONS]);
+    }
+
+    #[tokio::test]
+    async fn a_post_that_times_out_is_an_error_and_not_sent_again() {
+        let server = TestServer::start(vec![TOKEN, Reply::Stall]).await;
+        let config = config(server.base_url());
+        let auth_client = Arc::new(AuthClient::new(config.clone()).unwrap());
+        let client =
+            ActionClient::with_request_timeout(config, auth_client, SHORT_TIMEOUT).unwrap();
+
+        let result = tokio::time::timeout(HUNG, client.post_action_objects(vec![action(1, 10)]))
+            .await
+            .expect("the post hung");
+
+        assert!(result.is_err());
+        assert_eq!(lines(&server.requests()), [POST_TOKEN, POST_ACTIONS]);
+    }
+
+    #[tokio::test]
     #[ignore = "posts a real action to the Halo instance in .env; run with --ignored"]
     async fn post_action_object() {
         let config = Config::from_env().unwrap();
-        let auth_client = Arc::new(AuthClient::new(config.clone()));
-        let action_client = ActionClient::new(config, auth_client);
+        let auth_client = Arc::new(AuthClient::new(config.clone()).unwrap());
+        let action_client = ActionClient::new(config, auth_client).unwrap();
         let action_object = ActionObject::new(
             2997,
             None,

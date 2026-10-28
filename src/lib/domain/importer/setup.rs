@@ -328,7 +328,7 @@ pub async fn setup_auth_and_existing_ids(
         cache_data.fetched_resources.len()
     );
 
-    let auth_client = Arc::new(AuthClient::new(config.clone()));
+    let auth_client = Arc::new(AuthClient::new(config.clone())?);
     let _token = auth_client
         .fetch_token()
         .await
@@ -346,7 +346,7 @@ pub async fn setup_auth_and_existing_ids(
         return Ok((Some(auth_client), cache_data.action_ids));
     }
 
-    let report_client = ReportClient::new(config.clone(), auth_client.clone());
+    let report_client = ReportClient::new(config.clone(), auth_client.clone())?;
     let report_ids = report_client
         .get_existing_action_ids(cache, &cache_data.fetched_resources)
         .await
@@ -424,7 +424,8 @@ pub async fn setup(
     let (auth_client, existing_ids) = setup_auth_and_existing_ids(config, options, cache).await?;
     let action_client = auth_client
         .as_ref()
-        .map(|auth| ActionClient::new(config.clone(), auth.clone()));
+        .map(|auth| ActionClient::new(config.clone(), auth.clone()))
+        .transpose()?;
 
     Ok(SetupResult {
         existing_ids,

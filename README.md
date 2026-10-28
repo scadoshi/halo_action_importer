@@ -85,7 +85,7 @@ Progress is printed on every successful post rather than on a timer: position, I
 
 ## Failures
 
-A row that does not deserialize is logged and skipped; a file that cannot be read is logged and skipped; the run continues. After the summary, the process exits 1 when any action failed or any file could not be read, and 0 otherwise. Network errors and 504s retry until they succeed. A 401 refreshes the token and retries once; tokens are refreshed thirty seconds before they expire regardless.
+A row that does not deserialize is logged and skipped; a file that cannot be read is logged and skipped; the run continues. After the summary, the process exits 1 when any action failed or any file could not be read, and 0 otherwise. A request gives up after five minutes. A report fetch that hits a network error, a timeout or a 504 is tried again a minute later, three tries in all. A post is sent once: Halo may have stored the actions even when the reply is a 504 or never comes, so the batch goes to `retry.csv` instead of being sent again. A 401 gets a new token and one more try; tokens are also refreshed thirty seconds before they expire.
 
 A ticket that Halo reports as not found is logged once, and every later action for it is skipped. When a whole batch fails that way, the batch is regrouped by ticket and each group is posted on its own, so one missing ticket costs its own actions and not the batch.
 
