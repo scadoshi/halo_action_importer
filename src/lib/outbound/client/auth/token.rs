@@ -1,16 +1,13 @@
 use anyhow::Context;
 use chrono::{DateTime, Duration, Utc};
-use serde::{Deserialize, Serialize};
 
 /// How long before its expiry a token counts as expired, so a request never
 /// goes out with a token that lapses on the way.
 const EXPIRY_MARGIN: Duration = Duration::seconds(30);
 
-#[derive(Serialize, Deserialize)]
 pub struct AuthToken {
     access_token: String,
     token_type: String,
-    #[serde(with = "chrono::serde::ts_seconds")]
     expires_at: DateTime<Utc>,
 }
 

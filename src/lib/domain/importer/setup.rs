@@ -274,7 +274,6 @@ pub struct SetupResult {
     pub existing_ids: HashSet<ActionId>,
     pub action_client: Option<ActionClient>,
     pub files_to_process: Vec<(PathBuf, String)>,
-    pub auth_client: Option<Arc<AuthClient>>,
 }
 
 pub fn setup_logging(only_parse: bool, log_level: tracing::Level) -> anyhow::Result<String> {
@@ -459,7 +458,6 @@ pub async fn setup(
         existing_ids,
         action_client,
         files_to_process,
-        auth_client,
     })
 }
 

@@ -32,7 +32,6 @@ async fn main() -> anyhow::Result<ExitCode> {
         existing_ids,
         action_client,
         files_to_process,
-        auth_client: _,
     } = setup::setup(
         &config,
         SetupOptions {
