@@ -43,6 +43,8 @@ pub struct ExcelActionIterator {
     file_name: String,
     sheet_name: String,
     row_num: usize,
+    /// The spreadsheet row number of the first data row, as Excel shows it.
+    first_data_row: usize,
 }
 
 impl ExcelActionIterator {
@@ -75,7 +77,7 @@ impl ExcelActionIterator {
             return None;
         }
         let row = &self.rows[self.row_num];
-        let row_num_for_error = self.row_num + 1;
+        let row_num_for_error = self.first_data_row + self.row_num;
         let mut record = serde_json::Map::new();
         let mut has_any_data = false;
         let mut bad_ticket_id: Option<String> = None;
@@ -346,6 +348,12 @@ impl Excel for Reader {
                     first_sheet_name, file_name
                 )
             })?;
+        // The range starts at the first non-empty cell; Excel numbers rows from 1
+        // and the header takes the first one.
+        let header_row = range
+            .start()
+            .and_then(|(row, _)| usize::try_from(row).ok())
+            .unwrap_or(0);
         let mut rows_iter = range.rows();
         let headers: Vec<String> = match rows_iter.next() {
             Some(header_row) => header_row.iter().map(|cell| cell.to_string()).collect(),
@@ -372,6 +380,7 @@ impl Excel for Reader {
             file_name,
             sheet_name: first_sheet_name,
             row_num: 0,
+            first_data_row: header_row + 2,
         })
     }
 }
@@ -406,6 +415,7 @@ mod tests {
             file_name: "book.xlsx".to_string(),
             sheet_name: "Sheet1".to_string(),
             row_num: 0,
+            first_data_row: 2,
         }
     }
 
@@ -483,5 +493,12 @@ mod tests {
             excel_serial_to_datetime(serial(86_399.999_9)),
             Some(at(2, 0, 0, 0))
         );
+    }
+
+    #[test]
+    fn excel_row_numbers_in_errors_count_the_header_row() {
+        let mut iter = sheet(HEADERS, vec![row(Data::Float(10.5))]);
+        let message = iter.next().unwrap().unwrap_err().to_string();
+        assert!(message.contains("row 2 "), "{message}");
     }
 }
