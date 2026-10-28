@@ -69,7 +69,7 @@ impl ReportClient {
     /// # Errors
     ///
     /// When a report cannot be fetched or read, or is empty.
-    pub async fn get_existing_action_ids(
+    pub async fn fetch_existing_action_ids(
         &self,
         cache: &Cache,
     ) -> anyhow::Result<HashSet<ActionId>> {
@@ -237,7 +237,7 @@ mod tests {
     async fn fetch(server: &TestServer, name: &str) -> anyhow::Result<HashSet<ActionId>> {
         let dir = scratch_dir(name);
         let cache = Cache::new(&dir);
-        let result = tokio::time::timeout(HUNG, client(server).get_existing_action_ids(&cache))
+        let result = tokio::time::timeout(HUNG, client(server).fetch_existing_action_ids(&cache))
             .await
             .expect("the report fetch hung");
         std::fs::remove_dir_all(&dir).unwrap();
@@ -313,7 +313,7 @@ mod tests {
             .with_retry_backoff(backoff);
 
         let started = std::time::Instant::now();
-        let result = client.get_existing_action_ids(&Cache::new(&dir)).await;
+        let result = client.fetch_existing_action_ids(&Cache::new(&dir)).await;
         let elapsed = started.elapsed();
         std::fs::remove_dir_all(&dir).unwrap();
 
@@ -348,9 +348,10 @@ mod tests {
             .unwrap()
             .with_retry_backoff(Duration::ZERO);
 
-        let result = tokio::time::timeout(HUNG, client.get_existing_action_ids(&Cache::new(&dir)))
-            .await
-            .expect("the report fetch hung");
+        let result =
+            tokio::time::timeout(HUNG, client.fetch_existing_action_ids(&Cache::new(&dir)))
+                .await
+                .expect("the report fetch hung");
         std::fs::remove_dir_all(&dir).unwrap();
 
         assert_eq!(result.unwrap(), ids(&[1, 2, 3]));
@@ -389,7 +390,7 @@ mod tests {
         let cache = Cache::new(&dir);
 
         client(&server)
-            .get_existing_action_ids(&cache)
+            .fetch_existing_action_ids(&cache)
             .await
             .unwrap();
 

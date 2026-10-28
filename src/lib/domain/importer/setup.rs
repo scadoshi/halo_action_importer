@@ -370,7 +370,7 @@ pub async fn setup_auth_and_existing_ids(
 
     let report_client = ReportClient::new(config.clone(), Arc::clone(&auth_client))?;
     let report_ids = report_client
-        .get_existing_action_ids(cache)
+        .fetch_existing_action_ids(cache)
         .await
         .context("Failed to fetch existing action IDs from report")?;
     info!(
