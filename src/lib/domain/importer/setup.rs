@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashSet};
 use std::ffi::OsStr;
 use std::fs::OpenOptions;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -26,6 +26,7 @@ const LOG_DIR: &str = "log";
 const CACHE_DIR: &str = "cache";
 const RESOURCE_CACHE_FILE: &str = "cache/existing.json";
 const RESOURCE_CACHE_FILE_NAME: &str = "existing.json";
+const RESOURCE_CACHE_LOCK_FILE_NAME: &str = "existing.json.lock";
 const IMPORTED_CACHE_FILE: &str = "cache/imported";
 const IMPORTED_CACHE_FILE_NAME: &str = "imported";
 
@@ -64,29 +65,22 @@ pub fn parse_action_ids<'a>(ids: impl IntoIterator<Item = &'a str>, source: &str
     parsed
 }
 
-/// Read cached action IDs from both existing (JSON format) and imported (line-separated) files
-pub fn read_cached_ids() -> CacheData {
+/// Read cached action IDs from both existing (JSON format) and imported (line-separated) files.
+/// A resource cache that exists but cannot be read or parsed is an error naming the file.
+pub fn read_cached_ids() -> anyhow::Result<CacheData> {
     read_cached_ids_in(Path::new(CACHE_DIR))
 }
 
-fn read_cached_ids_in(cache_dir: &Path) -> CacheData {
+fn read_cached_ids_in(cache_dir: &Path) -> anyhow::Result<CacheData> {
     let mut action_ids = HashSet::new();
     let mut fetched_resources = HashSet::new();
 
-    // Read existing cache (JSON format)
-    let existing_path = cache_dir.join(RESOURCE_CACHE_FILE_NAME);
-    if existing_path.exists()
-        && let Ok(contents) = std::fs::read_to_string(&existing_path)
-        && !contents.trim().is_empty()
-        && let Ok(resources) = serde_json::from_str::<Vec<ResourceCache>>(&contents)
-    {
-        for resource in resources {
-            action_ids.extend(parse_action_ids(
-                resource.action_ids.iter().map(String::as_str),
-                RESOURCE_CACHE_FILE,
-            ));
-            fetched_resources.insert(resource.resource_id);
-        }
+    for resource in read_resource_cache(&cache_dir.join(RESOURCE_CACHE_FILE_NAME))? {
+        action_ids.extend(parse_action_ids(
+            resource.action_ids.iter().map(String::as_str),
+            RESOURCE_CACHE_FILE,
+        ));
+        fetched_resources.insert(resource.resource_id);
     }
 
     // Read imported IDs (simple text file, one ID per line)
@@ -104,10 +98,32 @@ fn read_cached_ids_in(cache_dir: &Path) -> CacheData {
         ));
     }
 
-    CacheData {
+    Ok(CacheData {
         action_ids,
         fetched_resources,
+    })
+}
+
+/// Reads the resource cache at `path`: nothing when the file is missing or
+/// blank, an error naming the file when it cannot be read or is not valid.
+fn read_resource_cache(path: &Path) -> anyhow::Result<Vec<ResourceCache>> {
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => {
+            return Err(e)
+                .with_context(|| format!("Failed to read cache file: {}", path.display()));
+        }
+    };
+    if contents.trim().is_empty() {
+        return Ok(Vec::new());
     }
+    serde_json::from_str(&contents).with_context(|| {
+        format!(
+            "Cache file {} is not valid; fix or delete it and rerun",
+            path.display()
+        )
+    })
 }
 
 /// Append action IDs to the existing cache file (JSON format with resource tracking)
@@ -127,27 +143,20 @@ fn append_resource_to_cache_in(
     std::fs::create_dir_all(cache_dir)
         .with_context(|| format!("Failed to create cache directory: {}", cache_dir.display()))?;
 
-    let cache_path = cache_dir.join(RESOURCE_CACHE_FILE_NAME);
-    let mut file = OpenOptions::new()
-        .read(true)
+    // Writers take a separate lock file, since the cache file itself is
+    // replaced by a rename on every write.
+    let lock_path = cache_dir.join(RESOURCE_CACHE_LOCK_FILE_NAME);
+    let lock = OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(false)
-        .open(&cache_path)
-        .with_context(|| format!("Failed to open cache file: {}", cache_path.display()))?;
-
-    file.lock_exclusive()
+        .open(&lock_path)
+        .with_context(|| format!("Failed to open cache lock file: {}", lock_path.display()))?;
+    lock.lock_exclusive()
         .with_context(|| "Failed to acquire exclusive lock on cache file")?;
 
-    let mut contents = String::new();
-    file.read_to_string(&mut contents).ok();
-
-    // Parse existing resources
-    let mut resources: Vec<ResourceCache> = if contents.trim().is_empty() {
-        Vec::new()
-    } else {
-        serde_json::from_str(&contents).unwrap_or_else(|_| Vec::new())
-    };
+    let cache_path = cache_dir.join(RESOURCE_CACHE_FILE_NAME);
+    let mut resources = read_resource_cache(&cache_path)?;
 
     // Merge with the resource's cached IDs as numbers, so `0042` and `42` are one ID.
     // A cached entry that is not a number is kept as it was.
@@ -180,11 +189,27 @@ fn append_resource_to_cache_in(
     let json = serde_json::to_string_pretty(&resources)
         .with_context(|| "Failed to serialize cache to JSON")?;
 
-    // Write back
-    file.seek(SeekFrom::Start(0))?;
-    file.set_len(0)?;
-    file.write_all(json.as_bytes())?;
+    write_atomically(&cache_path, json.as_bytes())
+}
 
+/// Writes `contents` to a temporary file next to `path` and renames it over
+/// `path`, so a reader sees the old file or the new one, never half of one.
+fn write_atomically(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
+    let file_name = path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .with_context(|| format!("Cache path has no file name: {}", path.display()))?;
+    let temp_path = path.with_file_name(format!("{file_name}.tmp-{}", std::process::id()));
+    let written = std::fs::File::create(&temp_path)
+        .and_then(|mut file| {
+            file.write_all(contents)?;
+            file.sync_all()
+        })
+        .and_then(|()| std::fs::rename(&temp_path, path));
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(e).with_context(|| format!("Failed to write cache file: {}", path.display()));
+    }
     Ok(())
 }
 
@@ -290,7 +315,7 @@ pub async fn setup_auth_and_existing_ids(
     config: &Config,
     options: SetupOptions,
 ) -> anyhow::Result<(Option<Arc<AuthClient>>, HashSet<ActionId>)> {
-    let cache_data = read_cached_ids();
+    let cache_data = read_cached_ids()?;
     info!(
         "Cache: {} existing action IDs from {} resource(s)",
         format_number(cache_data.action_ids.len()),
@@ -447,7 +472,7 @@ mod tests {
         .unwrap();
         std::fs::write(dir.join(IMPORTED_CACHE_FILE_NAME), "0100\n\nxyz\n").unwrap();
 
-        let cache = read_cached_ids_in(&dir);
+        let cache = read_cached_ids_in(&dir).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
         let expected: HashSet<ActionId> = [42, 7, 100].into_iter().map(ActionId::new).collect();
         assert_eq!(cache.action_ids, expected);
@@ -469,5 +494,54 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
         let resources: Vec<ResourceCache> = serde_json::from_str(&written).unwrap();
         assert_eq!(resources[0].action_ids, ["9", "10", "42"]);
+    }
+
+    #[test]
+    fn appending_to_a_corrupt_resource_cache_names_the_file_and_leaves_it_alone() {
+        let dir = scratch_dir("cache_corrupt_append");
+        let path = dir.join(RESOURCE_CACHE_FILE_NAME);
+        std::fs::write(&path, "[{ not json").unwrap();
+
+        let result = append_resource_to_cache_in(&dir, "r", &[ActionId::new(1)]);
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        let message = format!("{:#}", result.unwrap_err());
+        assert!(message.contains("existing.json"), "{message}");
+        assert_eq!(contents, "[{ not json");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_resource_cache_is_replaced_whole_rather_than_rewritten_in_place() {
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = scratch_dir("cache_rename");
+        let path = dir.join(RESOURCE_CACHE_FILE_NAME);
+        std::fs::write(&path, "[]").unwrap();
+        let before = std::fs::metadata(&path).unwrap().ino();
+
+        append_resource_to_cache_in(&dir, "r", &[ActionId::new(1)]).unwrap();
+
+        let after = std::fs::metadata(&path).unwrap().ino();
+        let mut names: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_ne!(before, after);
+        assert!(names.iter().all(|name| !name.contains(".tmp")), "{names:?}");
+    }
+
+    #[test]
+    fn a_corrupt_resource_cache_is_an_error_naming_the_file() {
+        let dir = scratch_dir("cache_corrupt_read");
+        std::fs::write(dir.join(RESOURCE_CACHE_FILE_NAME), "[{ not json").unwrap();
+
+        let result = read_cached_ids_in(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+        let message = format!("{:#}", result.err().unwrap());
+        assert!(message.contains("existing.json"), "{message}");
     }
 }

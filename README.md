@@ -71,7 +71,7 @@ Other columns are ignored.
 
 ## Cache
 
-`cache/existing.json` records, per report UUID, the action IDs it returned, so a rerun does not fetch a report it has already read. `cache/imported` is one action ID per line, appended as imports succeed. Together they let an interrupted run resume where it stopped. Delete `cache/` to start from the reports again.
+`cache/existing.json` records, per report UUID, the action IDs it returned, so a rerun does not fetch a report it has already read. `cache/imported` is one action ID per line, appended as imports succeed. Together they let an interrupted run resume where it stopped. Delete `cache/` to start from the reports again. A `cache/existing.json` that is not valid JSON stops the run and names the file rather than being treated as empty; it is written to a temporary file and renamed into place, so an interrupted write leaves the previous version.
 
 ## Output
 
