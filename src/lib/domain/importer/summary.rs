@@ -5,6 +5,7 @@ use tracing::{info, warn};
 use super::format;
 
 /// The counts and timings the end-of-run summary logs.
+#[derive(Debug, Clone, PartialEq)]
 pub struct ImportSummary {
     /// Rows read across every file.
     pub total_processed: usize,
@@ -25,15 +26,11 @@ pub struct ImportSummary {
 /// The process exit code for a run: 1 when any action failed or any file
 /// could not be read, 0 otherwise.
 pub fn exit_code(summary: &ImportSummary) -> u8 {
-    if summary.total_failed > 0 || !summary.skipped_files.is_empty() {
-        1
-    } else {
-        0
-    }
+    u8::from(summary.total_failed > 0 || !summary.skipped_files.is_empty())
 }
 
 /// Logs the counts and, when any rows were read, the timings.
-pub fn log_summary(summary: ImportSummary, only_parse: bool) {
+pub fn log_summary(summary: &ImportSummary, only_parse: bool) {
     info!("=== Import Summary ===");
     info!(
         "Total actions processed: {}",

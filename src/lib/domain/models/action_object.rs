@@ -135,7 +135,7 @@ where
     impl<'de> Visitor<'de> for ActionDateVisitor {
         type Value = Option<NaiveDateTime>;
 
-        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter.write_str("an optional date string in ISO 8601 format")
         }
 
@@ -167,7 +167,7 @@ where
                 .or_else(|_| NaiveDateTime::parse_from_str(cleaned, "%Y-%m-%dT%H:%M:%S%.fZ"))
                 .or_else(|_| NaiveDateTime::parse_from_str(cleaned, "%Y-%m-%dT%H:%M:%SZ"))
                 .map(Some)
-                .map_err(|e| de::Error::custom(format!("failed to parse date '{}': {}", value, e)))
+                .map_err(|e| de::Error::custom(format!("failed to parse date '{value}': {e}")))
         }
     }
 

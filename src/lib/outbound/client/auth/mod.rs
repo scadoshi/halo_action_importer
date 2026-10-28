@@ -135,10 +135,7 @@ impl AuthClient {
         }
 
         let response_text = match response.text().await.with_context(|| {
-            format!(
-                "failed to read authentication response body (status: {})",
-                status
-            )
+            format!("failed to read authentication response body (status: {status})")
         }) {
             Ok(text) => text,
             Err(e) => {

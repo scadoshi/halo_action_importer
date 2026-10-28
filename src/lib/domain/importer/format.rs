@@ -56,7 +56,7 @@ pub fn format_eta(remaining_rows: usize, avg_time_per_row: f64) -> String {
 /// A count as an `f64`, for rates and averages. Counts past `u32::MAX` read
 /// as `u32::MAX`, which no import comes near.
 pub fn count_to_f64(count: usize) -> f64 {
-    u32::try_from(count).map_or(f64::from(u32::MAX), f64::from)
+    u32::try_from(count).map_or_else(|_| f64::from(u32::MAX), f64::from)
 }
 
 /// The mean of `values`, or 0 when there are none.

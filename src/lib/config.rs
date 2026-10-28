@@ -85,10 +85,7 @@ impl Config {
 
         let base_url_str = var(BASE_RESOURCE_URL_KEY)?;
         let base_resource_url = Url::try_from(base_url_str.as_str()).with_context(|| {
-            format!(
-                "invalid URL format for {}: {}",
-                BASE_RESOURCE_URL_KEY, base_url_str
-            )
+            format!("invalid URL format for {BASE_RESOURCE_URL_KEY}: {base_url_str}")
         })?;
         let mut token_url = base_resource_url.clone();
         token_url.set_path(TOKEN_URL_PATH);
@@ -117,9 +114,7 @@ impl Config {
             "error" => Level::ERROR,
             _ => {
                 anyhow::bail!(
-                    "invalid log level '{}' for {}. must be one of: trace, debug, info, warn, error",
-                    log_level_str_trimmed,
-                    LOG_LEVEL_KEY
+                    "invalid log level '{log_level_str_trimmed}' for {LOG_LEVEL_KEY}. must be one of: trace, debug, info, warn, error"
                 );
             }
         };

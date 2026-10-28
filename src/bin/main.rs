@@ -1,3 +1,6 @@
+//! The `halo_action_importer` command: imports the CSV and Excel files in a
+//! directory into Halo. `--help` lists the options.
+
 use std::process::ExitCode;
 use std::time::Instant;
 
@@ -87,7 +90,7 @@ async fn main() -> anyhow::Result<ExitCode> {
         sheet_times: totals.sheet_times.clone(),
     };
     let code = summary::exit_code(&import_summary);
-    summary::log_summary(import_summary, only_parse);
+    summary::log_summary(&import_summary, only_parse);
 
     if totals.retry_actions().next().is_some() {
         processor::write_retry_csv(&log_dir_path, totals.retry_actions())?;

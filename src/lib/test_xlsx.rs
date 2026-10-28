@@ -1,5 +1,6 @@
 //! Builds small .xlsx workbooks for tests: one worksheet, cells written inline.
 
+use std::fmt::Write as _;
 use std::io::{Cursor, Write};
 
 use zip::ZipWriter;
@@ -20,17 +21,19 @@ pub(crate) fn xlsx(rows: &[Vec<Cell<'_>>]) -> Vec<u8> {
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>"#,
     );
     for (row, number) in rows.iter().zip(1..) {
-        sheet.push_str(&format!(r#"<row r="{number}">"#));
+        write!(sheet, r#"<row r="{number}">"#).unwrap();
         for (c, cell) in row.iter().enumerate() {
             let column = char::from(b'A'.checked_add(u8::try_from(c).unwrap()).unwrap());
             let reference = format!("{column}{number}");
             match cell {
-                Cell::Text(text) => sheet.push_str(&format!(
+                Cell::Text(text) => write!(
+                    sheet,
                     r#"<c r="{reference}" t="inlineStr"><is><t>{}</t></is></c>"#,
                     escape(text)
-                )),
+                )
+                .unwrap(),
                 Cell::Number(value) => {
-                    sheet.push_str(&format!(r#"<c r="{reference}"><v>{value}</v></c>"#));
+                    write!(sheet, r#"<c r="{reference}"><v>{value}</v></c>"#).unwrap();
                 }
                 Cell::Empty => {}
             }

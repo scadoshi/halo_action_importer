@@ -16,6 +16,16 @@ pub struct Actions {
     total_rows: usize,
 }
 
+impl std::fmt::Debug for Actions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Actions")
+            .field("file_name", &self.file_name)
+            .field("row_num", &self.row_num)
+            .field("total_rows", &self.total_rows)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Actions {
     /// How many data rows the file has, good or bad.
     pub fn total_rows(&self) -> usize {
@@ -54,12 +64,12 @@ pub fn actions(path: &Path) -> anyhow::Result<Actions> {
         .to_string();
     let total_rows = {
         let file = std::fs::File::open(path)
-            .with_context(|| format!("failed to open csv file: {}", file_name))?;
+            .with_context(|| format!("failed to open csv file: {file_name}"))?;
         let mut rdr = ReaderBuilder::new().has_headers(true).from_reader(file);
         rdr.records().count()
     };
     let file = std::fs::File::open(path)
-        .with_context(|| format!("failed to open csv file: {}", file_name))?;
+        .with_context(|| format!("failed to open csv file: {file_name}"))?;
     let rdr = ReaderBuilder::new().has_headers(true).from_reader(file);
     Ok(Actions {
         rdr: rdr.into_deserialize(),

@@ -37,6 +37,7 @@ struct ResourceCache {
 }
 
 /// What the cache holds.
+#[derive(Debug)]
 pub struct CacheData {
     /// Every ID in `existing.json` and `imported`.
     pub action_ids: HashSet<ActionId>,
@@ -227,7 +228,11 @@ impl Cache {
 
         // One write per call, so a crash leaves at most one unfinished last
         // line, which `read` leaves out.
-        let lines: String = ids.iter().map(|id| format!("{id}\n")).collect();
+        let mut lines = String::new();
+        for id in ids {
+            lines.push_str(id);
+            lines.push('\n');
+        }
         file.write_all(lines.as_bytes())
             .and_then(|()| file.sync_data())
             .with_context(|| format!("Failed to write imported cache file: {}", path.display()))?;
@@ -292,6 +297,7 @@ pub struct SetupOptions {
 }
 
 /// What a run starts from.
+#[derive(Debug)]
 pub struct SetupResult {
     /// The IDs to skip: everything in the cache, plus the reports on a sync.
     pub existing_ids: HashSet<ActionId>,
@@ -310,25 +316,21 @@ pub struct SetupResult {
 /// When the log directory or file cannot be created.
 pub fn setup_logging(only_parse: bool, log_level: tracing::Level) -> anyhow::Result<String> {
     std::fs::create_dir_all(LOG_DIR)
-        .with_context(|| format!("Failed to create log directory: {}", LOG_DIR))?;
+        .with_context(|| format!("Failed to create log directory: {LOG_DIR}"))?;
 
     let timestamp_str = Utc::now().format("%Y-%m-%d_%H-%M-%S");
-    let log_dir_path = format!("{}/{}", LOG_DIR, timestamp_str);
+    let log_dir_path = format!("{LOG_DIR}/{timestamp_str}");
 
-    std::fs::create_dir_all(&log_dir_path).with_context(|| {
-        format!(
-            "Failed to create timestamped log directory: {}",
-            log_dir_path
-        )
-    })?;
+    std::fs::create_dir_all(&log_dir_path)
+        .with_context(|| format!("Failed to create timestamped log directory: {log_dir_path}"))?;
 
-    let log_file_path = format!("{}/full.log", log_dir_path);
+    let log_file_path = format!("{log_dir_path}/full.log");
     let log_file = OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(true)
         .open(&log_file_path)
-        .with_context(|| format!("Failed to open log file: {}", log_file_path))?;
+        .with_context(|| format!("Failed to open log file: {log_file_path}"))?;
 
     let level_filter = if only_parse {
         LevelFilter::INFO
@@ -444,14 +446,14 @@ pub async fn setup_auth_and_existing_ids(
 pub fn discover_files(input_path: &str) -> anyhow::Result<Vec<(PathBuf, String)>> {
     let input_dir = Path::new(input_path);
     if !input_dir.exists() {
-        anyhow::bail!("Input directory '{}' does not exist", input_path);
+        anyhow::bail!("Input directory '{input_path}' does not exist");
     }
     let mut files_to_process = Vec::new();
     for entry in std::fs::read_dir(input_dir)
-        .with_context(|| format!("Failed to read input directory: {}", input_path))?
+        .with_context(|| format!("Failed to read input directory: {input_path}"))?
     {
         let entry = entry
-            .with_context(|| format!("Failed to read entry in input directory: {}", input_path))?;
+            .with_context(|| format!("Failed to read entry in input directory: {input_path}"))?;
         let file_path = entry.path();
         if !file_path.is_file() {
             continue;
@@ -489,8 +491,7 @@ pub async fn setup(
     let files_to_process = discover_files(input_path)?;
     if files_to_process.is_empty() {
         anyhow::bail!(
-            "No CSV or Excel files found in input directory: {}. Nothing to process.",
-            input_path
+            "No CSV or Excel files found in input directory: {input_path}. Nothing to process."
         );
     }
 

@@ -195,11 +195,7 @@ async fn read_report(response: Response) -> anyhow::Result<Vec<ReportResponse>> 
             "Report request failed: status {}, error: {}",
             status, error_text
         );
-        anyhow::bail!(
-            "Report request failed: status {}, error: {}",
-            status,
-            error_text
-        );
+        anyhow::bail!("Report request failed: status {status}, error: {error_text}");
     }
 
     match response

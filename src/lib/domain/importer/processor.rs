@@ -20,6 +20,7 @@ use crate::inbound::file::RowError;
 use crate::outbound::client::action::{ActionClient, PostError, TICKET_NOT_FOUND};
 
 /// An action that did not get into Halo, and why.
+#[derive(Debug)]
 pub struct FailedAction {
     /// The action as read from its file.
     pub action: ActionObject,
@@ -28,6 +29,7 @@ pub struct FailedAction {
 }
 
 /// What one file came to.
+#[derive(Debug)]
 pub struct ProcessingStats {
     /// Rows read, whatever became of them.
     pub processed: usize,
@@ -45,6 +47,7 @@ pub struct ProcessingStats {
 }
 
 /// A row that did not read as an action, and the file it is in.
+#[derive(Debug)]
 pub struct UnparsedRow {
     /// The file's name.
     pub file: String,
@@ -232,6 +235,7 @@ fn record_imported(cache: &Cache, existing_ids: &mut HashSet<ActionId>, actions:
 }
 
 /// Settings for a run, the same for every file.
+#[derive(Debug)]
 pub struct ProcessConfig<'a> {
     /// Posts the actions. `None` in parse-only mode.
     pub action_client: Option<&'a ActionClient>,
@@ -244,6 +248,7 @@ pub struct ProcessConfig<'a> {
 }
 
 /// What a run over every file came to.
+#[derive(Debug)]
 pub struct RunTotals {
     /// Rows read, whatever became of them.
     pub processed: usize,
@@ -282,6 +287,7 @@ impl RunTotals {
 /// One run over a list of files. It carries what each file leaves for the
 /// next: the ids already in Halo, which grow as posts succeed, and how long
 /// each file took.
+#[derive(Debug)]
 pub struct Run<'a> {
     config: ProcessConfig<'a>,
     /// Ids already in Halo, from the cache plus every id this run has posted.
@@ -380,7 +386,7 @@ impl<'a> Run<'a> {
                 }
                 Err(e) => {
                     error!("Failed to read file {:?}: {}", file_name, e);
-                    totals.skipped_files.push(format!("{:?}: {}", file_name, e));
+                    totals.skipped_files.push(format!("{file_name:?}: {e}"));
                 }
             }
         }
@@ -631,7 +637,7 @@ pub fn write_retry_csv<'a>(
     log_dir: &str,
     failed: impl IntoIterator<Item = &'a FailedAction>,
 ) -> anyhow::Result<()> {
-    let csv_path = format!("{}/retry.csv", log_dir);
+    let csv_path = format!("{log_dir}/retry.csv");
     let file = File::create(&csv_path)?;
     let mut writer = Writer::from_writer(file);
 
@@ -763,7 +769,7 @@ pub fn write_summary_json(
     } = totals;
     let (total_processed, total_imported, total_skipped) =
         (*total_processed, *total_imported, *total_skipped);
-    let json_path = format!("{}/summary.json", log_dir);
+    let json_path = format!("{log_dir}/summary.json");
 
     let rows_per_second = if runtime_secs > 0.0 {
         format::count_to_f64(total_processed) / runtime_secs
@@ -843,6 +849,7 @@ pub fn write_summary_json(
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -1261,7 +1268,7 @@ mod tests {
     fn csv_file(rows: &[(u32, u64)]) -> Vec<u8> {
         let mut csv = HEADER.to_string();
         for (ticket, action) in rows {
-            csv.push_str(&format!("{ticket},{action},w,n,\n"));
+            writeln!(csv, "{ticket},{action},w,n,").unwrap();
         }
         csv.into_bytes()
     }
@@ -1779,7 +1786,7 @@ mod tests {
     async fn the_error_summary_lists_error_types_in_name_order() {
         let mut csv = format!("{HEADER}nope,1,w,n,\n");
         for ticket in 1..=5 {
-            csv.push_str(&format!("{ticket},{ticket}0,w,n,\n"));
+            writeln!(csv, "{ticket},{ticket}0,w,n,").unwrap();
         }
         let server = TestServer::start(vec![
             TOKEN,

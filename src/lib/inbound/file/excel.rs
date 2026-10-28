@@ -7,6 +7,7 @@ use anyhow::Context;
 use calamine::{Data, Reader as CalamineReader};
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use serde::Deserialize;
+use serde_json::{Map, Value};
 
 use crate::domain::models::action_object::ActionObject;
 use crate::inbound::file::RowError;
@@ -58,6 +59,7 @@ fn ticket_id_from_float(value: f64) -> Option<u32> {
 
 /// The rows of an Excel file's first worksheet as actions, in sheet order.
 /// Rows with no data in them are left out.
+#[derive(Debug)]
 pub struct Actions {
     rows: Vec<Vec<Data>>,
     headers: Vec<String>,
@@ -85,256 +87,255 @@ impl Iterator for Actions {
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            if let Some(item) = self.read_row()? {
-                return Some(item);
+            match self.read_row() {
+                RowRead::End => return None,
+                RowRead::Blank => {}
+                RowRead::Row(item) => return Some(item),
             }
         }
     }
 }
 
+/// What reading the next row of a sheet came to.
+enum RowRead {
+    /// The sheet has no more rows.
+    End,
+    /// The row has no data in it.
+    Blank,
+    /// The row as an action, or why it is not one.
+    Row(Result<ActionObject, RowError>),
+}
+
 impl Actions {
-    /// Reads the next row: `None` at the end of the sheet, `Some(None)` for a
-    /// row with no data in it.
-    fn read_row(&mut self) -> Option<Option<Result<ActionObject, RowError>>> {
-        if self.row_num >= self.rows.len() {
-            return None;
-        }
-        let row = &self.rows[self.row_num];
-        let row_num_for_error = self.first_data_row.saturating_add(self.row_num);
-        let mut record = serde_json::Map::new();
+    fn read_row(&mut self) -> RowRead {
+        let Some(row) = self.rows.get(self.row_num) else {
+            return RowRead::End;
+        };
+        let row_number = self.first_data_row.saturating_add(self.row_num);
+        let mut record = Map::new();
         let mut has_any_data = false;
         let mut bad_ticket_id: Option<String> = None;
         for (idx, header) in self.headers.iter().enumerate() {
-            let header_lower = header.to_lowercase();
-            let is_date_field = header_lower == "actiondate"
-                || header_lower == "action_date"
-                || header == "actionDate"
-                || header == "ActionDate"
-                || header == "ACTIONDATE";
-            let is_numeric_field = TICKET_ID_HEADERS.contains(&header.as_str());
-            let cell_value = if idx < row.len() {
-                match &row[idx] {
-                    Data::Empty => {
-                        if is_date_field {
-                            serde_json::Value::Null
-                        } else {
-                            serde_json::Value::String(String::new())
-                        }
-                    }
-                    Data::String(s) => {
-                        let trimmed = s.trim();
-                        if !trimmed.is_empty() {
-                            has_any_data = true;
-                        }
-                        if is_date_field {
-                            if trimmed.is_empty() {
-                                serde_json::Value::Null
-                            } else if let Ok(serial) = trimmed.parse::<f64>() {
-                                match excel_serial_to_datetime(serial) {
-                                    Some(dt) => serde_json::Value::String(
-                                        dt.format("%Y-%m-%dT%H:%M:%S").to_string(),
-                                    ),
-                                    None => serde_json::Value::String(s.clone()),
-                                }
-                            } else {
-                                let dt_clean = trimmed.trim_end_matches('Z').trim_end_matches('z');
-                                match NaiveDateTime::parse_from_str(
-                                    dt_clean,
-                                    "%Y-%m-%dT%H:%M:%S%.f",
-                                ) {
-                                    Ok(ndt) => serde_json::Value::String(
-                                        ndt.format("%Y-%m-%dT%H:%M:%S").to_string(),
-                                    ),
-                                    Err(_) => {
-                                        match NaiveDateTime::parse_from_str(
-                                            dt_clean,
-                                            "%Y-%m-%dT%H:%M:%S",
-                                        ) {
-                                            Ok(ndt) => serde_json::Value::String(
-                                                ndt.format("%Y-%m-%dT%H:%M:%S").to_string(),
-                                            ),
-                                            Err(_) => serde_json::Value::String(s.clone()),
-                                        }
-                                    }
-                                }
-                            }
-                        } else if is_numeric_field {
-                            if let Ok(num) = trimmed.parse::<u32>() {
-                                serde_json::Value::Number(num.into())
-                            } else {
-                                serde_json::Value::String(s.clone())
-                            }
-                        } else {
-                            serde_json::Value::String(s.clone())
-                        }
-                    }
-                    Data::Float(f) => {
-                        has_any_data = true;
-                        if is_date_field {
-                            match excel_serial_to_datetime(*f) {
-                                Some(dt) => serde_json::Value::String(
-                                    dt.format("%Y-%m-%dT%H:%M:%S").to_string(),
-                                ),
-                                None => serde_json::Value::Null,
-                            }
-                        } else if is_numeric_field {
-                            match ticket_id_from_float(*f) {
-                                Some(id) => serde_json::Value::Number(id.into()),
-                                None => {
-                                    bad_ticket_id = Some(f.to_string());
-                                    serde_json::Value::Null
-                                }
-                            }
-                        } else {
-                            serde_json::Value::String(f.to_string())
-                        }
-                    }
-                    Data::Int(i) => {
-                        has_any_data = true;
-                        if is_numeric_field {
-                            match u32::try_from(*i) {
-                                Ok(id) => serde_json::Value::Number(id.into()),
-                                Err(_) => {
-                                    bad_ticket_id = Some(i.to_string());
-                                    serde_json::Value::Null
-                                }
-                            }
-                        } else {
-                            serde_json::Value::String(i.to_string())
-                        }
-                    }
-                    Data::Bool(b) => {
-                        has_any_data = true;
-                        serde_json::Value::String(b.to_string())
-                    }
-                    Data::DateTime(dt) => {
-                        has_any_data = true;
-                        if is_date_field {
-                            let serial = dt.as_f64();
-                            match excel_serial_to_datetime(serial) {
-                                Some(ndt) => {
-                                    let date_str = ndt.format("%Y-%m-%dT%H:%M:%S").to_string();
-                                    serde_json::Value::String(date_str)
-                                }
-                                None => {
-                                    tracing::warn!(
-                                        "Failed to convert Excel DateTime serial {} to NaiveDateTime",
-                                        serial
-                                    );
-                                    serde_json::Value::Null
-                                }
-                            }
-                        } else {
-                            serde_json::Value::String(dt.to_string())
-                        }
-                    }
-                    Data::DateTimeIso(dt) => {
-                        has_any_data = true;
-                        if is_date_field {
-                            let dt_clean = dt.trim_end_matches('Z').trim_end_matches('z');
-                            match NaiveDateTime::parse_from_str(dt_clean, "%Y-%m-%dT%H:%M:%S%.f") {
-                                Ok(ndt) => serde_json::Value::String(
-                                    ndt.format("%Y-%m-%dT%H:%M:%S").to_string(),
-                                ),
-                                Err(_) => {
-                                    match NaiveDateTime::parse_from_str(
-                                        dt_clean,
-                                        "%Y-%m-%dT%H:%M:%S",
-                                    ) {
-                                        Ok(ndt) => serde_json::Value::String(
-                                            ndt.format("%Y-%m-%dT%H:%M:%S").to_string(),
-                                        ),
-                                        Err(_) => {
-                                            match NaiveDateTime::parse_from_str(
-                                                dt_clean,
-                                                "%Y-%m-%d %H:%M:%S",
-                                            ) {
-                                                Ok(ndt) => serde_json::Value::String(
-                                                    ndt.format("%Y-%m-%dT%H:%M:%S").to_string(),
-                                                ),
-                                                Err(_) => {
-                                                    serde_json::Value::String(dt_clean.to_string())
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        } else {
-                            serde_json::Value::String(dt.clone())
-                        }
-                    }
-                    Data::DurationIso(d) => {
-                        has_any_data = true;
-                        serde_json::Value::String(d.clone())
-                    }
-                    Data::Error(e) => {
-                        has_any_data = true;
-                        serde_json::Value::String(format!("{:?}", e))
-                    }
-                }
-            } else if is_date_field {
-                serde_json::Value::Null
-            } else {
-                serde_json::Value::String(String::new())
-            };
-            let normalized_header = if is_date_field {
+            let column = Column::of(header);
+            let cell = read_cell(row.get(idx).unwrap_or(&EMPTY), column);
+            has_any_data |= cell.has_data;
+            if cell.bad_ticket_id.is_some() {
+                bad_ticket_id = cell.bad_ticket_id;
+            }
+            let key = if column == Column::Date {
                 "actionDate".to_string()
             } else {
                 header.clone()
             };
-            record.insert(normalized_header, cell_value);
+            record.insert(key, cell.value);
         }
         self.row_num = self.row_num.saturating_add(1);
         if let Some(value) = bad_ticket_id {
-            return Some(Some(Err(RowError {
-                row: row_num_for_error,
+            return RowRead::Row(Err(RowError {
+                row: row_number,
                 message: format!(
-                    "ticket id {} in row {} of worksheet '{}' of excel file '{}' is not a whole number from 0 to {}",
-                    value,
-                    row_num_for_error,
+                    "ticket id {value} in row {row_number} of worksheet '{}' of excel file '{}' is not a whole number from 0 to {}",
                     self.sheet_name,
                     self.file_name,
                     u32::MAX
                 ),
-            })));
+            }));
         }
         if !has_any_data {
-            return Some(None);
+            return RowRead::Blank;
         }
+        RowRead::Row(self.to_action(record, row_number))
+    }
+
+    /// Deserializes a row's `record` as an action.
+    fn to_action(
+        &self,
+        record: Map<String, Value>,
+        row_number: usize,
+    ) -> Result<ActionObject, RowError> {
         let available_fields: Vec<String> = record.keys().cloned().collect();
-        let json_value = serde_json::Value::Object(record);
+        let json_value = Value::Object(record);
         match ActionObject::deserialize(&json_value) {
             Ok(action_object) => {
                 if action_object.actiondate.is_none() {
                     tracing::warn!(
-                        "Date field is None after deserialization. Available fields: {:?}",
-                        available_fields
+                        "Date field is None after deserialization. Available fields: {available_fields:?}"
                     );
                     if let Some(date_val) = json_value.get("actionDate") {
-                        tracing::warn!("Date value in JSON was: {:?}", date_val);
+                        tracing::warn!("Date value in JSON was: {date_val:?}");
                     }
                 }
-                Some(Some(Ok(action_object)))
+                Ok(action_object)
             }
             Err(e) => {
                 let json_str = serde_json::to_string(&json_value)
                     .unwrap_or_else(|_| "failed to serialize".to_string());
-                let error_str = e.to_string();
                 let field_info = format!(
-                    "Available fields: [{}]. Error: {}",
-                    available_fields.join(", "),
-                    error_str
+                    "Available fields: [{}]. Error: {e}",
+                    available_fields.join(", ")
                 );
-                Some(Some(Err(RowError {
-                    row: row_num_for_error,
+                Err(RowError {
+                    row: row_number,
                     message: format!(
-                        "failed to deserialize row {} in worksheet '{}' of excel file '{}': {} (data: {})",
-                        row_num_for_error, self.sheet_name, self.file_name, field_info, json_str
+                        "failed to deserialize row {row_number} in worksheet '{}' of excel file '{}': {field_info} (data: {json_str})",
+                        self.sheet_name, self.file_name
                     ),
-                })))
+                })
             }
         }
+    }
+}
+
+/// A cell past the end of a short row reads as empty.
+const EMPTY: Data = Data::Empty;
+
+/// How a date goes to the action's deserializer.
+const DATE_FORMAT: &str = "%Y-%m-%dT%H:%M:%S";
+
+/// The formats a date typed as text is tried in, in order.
+const TEXT_DATE_FORMATS: &[&str] = &["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%dT%H:%M:%S"];
+
+/// The formats an ISO date cell is tried in, in order.
+const ISO_DATE_FORMATS: &[&str] = &[
+    "%Y-%m-%dT%H:%M:%S%.f",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%d %H:%M:%S",
+];
+
+/// The first of `formats` that `text` parses in.
+fn parse_date(text: &str, formats: &[&str]) -> Option<NaiveDateTime> {
+    formats
+        .iter()
+        .find_map(|format| NaiveDateTime::parse_from_str(text, format).ok())
+}
+
+fn date_value(date: NaiveDateTime) -> Value {
+    Value::String(date.format(DATE_FORMAT).to_string())
+}
+
+/// What a column holds, which decides how its cells read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Column {
+    /// The action date: serial dates and date text become [`DATE_FORMAT`].
+    Date,
+    /// The ticket ID: a number that fits a `u32`.
+    TicketId,
+    /// Anything else, read as text.
+    Text,
+}
+
+impl Column {
+    fn of(header: &str) -> Self {
+        if matches!(header.to_lowercase().as_str(), "actiondate" | "action_date") {
+            Self::Date
+        } else if TICKET_ID_HEADERS.contains(&header) {
+            Self::TicketId
+        } else {
+            Self::Text
+        }
+    }
+}
+
+/// A cell as the row's JSON record takes it.
+struct CellRead {
+    value: Value,
+    /// Whether the cell holds anything; a row of empty cells is skipped.
+    has_data: bool,
+    /// A ticket ID cell's value when it is not a whole number that fits.
+    bad_ticket_id: Option<String>,
+}
+
+impl CellRead {
+    fn data(value: Value) -> Self {
+        Self {
+            value,
+            has_data: true,
+            bad_ticket_id: None,
+        }
+    }
+}
+
+fn read_cell(cell: &Data, column: Column) -> CellRead {
+    match cell {
+        Data::Empty => CellRead {
+            value: if column == Column::Date {
+                Value::Null
+            } else {
+                Value::String(String::new())
+            },
+            has_data: false,
+            bad_ticket_id: None,
+        },
+        Data::String(s) => {
+            let trimmed = s.trim();
+            let value = match column {
+                Column::Date if trimmed.is_empty() => Value::Null,
+                Column::Date => {
+                    if let Ok(serial) = trimmed.parse::<f64>() {
+                        excel_serial_to_datetime(serial)
+                            .map_or_else(|| Value::String(s.clone()), date_value)
+                    } else {
+                        let clean = trimmed.trim_end_matches('Z').trim_end_matches('z');
+                        parse_date(clean, TEXT_DATE_FORMATS)
+                            .map_or_else(|| Value::String(s.clone()), date_value)
+                    }
+                }
+                Column::TicketId => trimmed
+                    .parse::<u32>()
+                    .map_or_else(|_| Value::String(s.clone()), |id| Value::Number(id.into())),
+                Column::Text => Value::String(s.clone()),
+            };
+            CellRead {
+                value,
+                has_data: !trimmed.is_empty(),
+                bad_ticket_id: None,
+            }
+        }
+        Data::Float(f) => match column {
+            Column::Date => {
+                CellRead::data(excel_serial_to_datetime(*f).map_or(Value::Null, date_value))
+            }
+            Column::TicketId => match ticket_id_from_float(*f) {
+                Some(id) => CellRead::data(Value::Number(id.into())),
+                None => CellRead {
+                    bad_ticket_id: Some(f.to_string()),
+                    ..CellRead::data(Value::Null)
+                },
+            },
+            Column::Text => CellRead::data(Value::String(f.to_string())),
+        },
+        Data::Int(i) => match (column, u32::try_from(*i)) {
+            (Column::TicketId, Ok(id)) => CellRead::data(Value::Number(id.into())),
+            (Column::TicketId, Err(_)) => CellRead {
+                bad_ticket_id: Some(i.to_string()),
+                ..CellRead::data(Value::Null)
+            },
+            _ => CellRead::data(Value::String(i.to_string())),
+        },
+        Data::Bool(b) => CellRead::data(Value::String(b.to_string())),
+        Data::DateTime(dt) if column == Column::Date => {
+            let serial = dt.as_f64();
+            CellRead::data(excel_serial_to_datetime(serial).map_or_else(
+                || {
+                    tracing::warn!(
+                        "Failed to convert Excel DateTime serial {serial} to NaiveDateTime"
+                    );
+                    Value::Null
+                },
+                date_value,
+            ))
+        }
+        Data::DateTime(dt) => CellRead::data(Value::String(dt.to_string())),
+        Data::DateTimeIso(dt) if column == Column::Date => {
+            let clean = dt.trim_end_matches('Z').trim_end_matches('z');
+            CellRead::data(
+                parse_date(clean, ISO_DATE_FORMATS)
+                    .map_or_else(|| Value::String(clean.to_string()), date_value),
+            )
+        }
+        Data::DateTimeIso(dt) => CellRead::data(Value::String(dt.clone())),
+        Data::DurationIso(d) => CellRead::data(Value::String(d.clone())),
+        Data::Error(e) => CellRead::data(Value::String(format!("{e:?}"))),
     }
 }
 
@@ -352,19 +353,16 @@ pub fn actions(path: &Path) -> anyhow::Result<Actions> {
         .unwrap_or("unknown file")
         .to_string();
     let mut workbook = calamine::open_workbook_auto(path)
-        .with_context(|| format!("failed to open excel file: {}", file_name))?;
-    let sheet_names = workbook.sheet_names().to_owned();
+        .with_context(|| format!("failed to open excel file: {file_name}"))?;
+    let sheet_names = workbook.sheet_names();
     let first_sheet_name = sheet_names
         .first()
-        .ok_or_else(|| anyhow::anyhow!("excel file '{}' has no worksheets", file_name))?
+        .ok_or_else(|| anyhow::anyhow!("excel file '{file_name}' has no worksheets"))?
         .clone();
     let range = workbook
         .worksheet_range(&first_sheet_name)
         .with_context(|| {
-            format!(
-                "failed to read worksheet '{}' from excel file: {}",
-                first_sheet_name, file_name
-            )
+            format!("failed to read worksheet '{first_sheet_name}' from excel file: {file_name}")
         })?;
     // The range starts at the first non-empty cell; Excel numbers rows from 1
     // and the header takes the first one.
@@ -374,12 +372,13 @@ pub fn actions(path: &Path) -> anyhow::Result<Actions> {
         .unwrap_or(0);
     let mut rows_iter = range.rows();
     let headers: Vec<String> = match rows_iter.next() {
-        Some(header_row) => header_row.iter().map(|cell| cell.to_string()).collect(),
+        Some(header_row) => header_row
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect(),
         None => {
             return Err(anyhow::anyhow!(
-                "first worksheet '{}' of excel file '{}' has no header row",
-                first_sheet_name,
-                file_name
+                "first worksheet '{first_sheet_name}' of excel file '{file_name}' has no header row"
             ));
         }
     };
