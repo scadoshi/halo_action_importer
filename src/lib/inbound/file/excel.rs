@@ -5,7 +5,7 @@ use calamine::{Data, Reader as CalamineReader, open_workbook_auto};
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 
 use crate::domain::models::action_object::ActionObject;
-use crate::inbound::file::{Reader, RowError};
+use crate::inbound::file::RowError;
 
 fn excel_serial_to_datetime(serial: f64) -> Option<NaiveDateTime> {
     let excel_epoch = NaiveDate::from_ymd_opt(1899, 12, 30)?;
@@ -45,12 +45,9 @@ fn ticket_id_from_float(value: f64) -> Option<u32> {
     }
 }
 
-pub trait Excel {
-    fn try_excel_to_action_objects(path: &Path) -> anyhow::Result<Vec<ActionObject>>;
-    fn excel_action_iter(path: &Path) -> anyhow::Result<ExcelActionIterator>;
-}
-
-pub struct ExcelActionIterator {
+/// The rows of an Excel file's first worksheet as actions, in sheet order.
+/// Rows with no data in them are left out.
+pub struct Actions {
     rows: Vec<Vec<Data>>,
     headers: Vec<String>,
     file_name: String,
@@ -60,7 +57,7 @@ pub struct ExcelActionIterator {
     first_data_row: usize,
 }
 
-impl ExcelActionIterator {
+impl Actions {
     pub fn total_rows(&self) -> usize {
         self.rows.len()
     }
@@ -70,7 +67,7 @@ impl ExcelActionIterator {
     }
 }
 
-impl Iterator for ExcelActionIterator {
+impl Iterator for Actions {
     type Item = Result<ActionObject, RowError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -82,7 +79,7 @@ impl Iterator for ExcelActionIterator {
     }
 }
 
-impl ExcelActionIterator {
+impl Actions {
     /// Reads the next row: `None` at the end of the sheet, `Some(None)` for a
     /// row with no data in it.
     fn read_row(&mut self) -> Option<Option<Result<ActionObject, RowError>>> {
@@ -328,72 +325,68 @@ impl ExcelActionIterator {
     }
 }
 
-impl Excel for Reader {
-    fn try_excel_to_action_objects(path: &Path) -> anyhow::Result<Vec<ActionObject>> {
-        let iter = Self::excel_action_iter(path)?;
-        let mut output = Vec::new();
-        for result in iter {
-            output.push(result?);
+/// Opens the Excel file at `path` and reads the rows of its first worksheet
+/// as actions. A row that does not read is an error item, and the rows after
+/// it still read.
+///
+/// # Errors
+///
+/// When the file cannot be opened or has no worksheet or header row.
+pub fn actions(path: &Path) -> anyhow::Result<Actions> {
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown file")
+        .to_string();
+    let mut workbook = open_workbook_auto(path)
+        .with_context(|| format!("failed to open excel file: {}", file_name))?;
+    let sheet_names = workbook.sheet_names().to_owned();
+    let first_sheet_name = sheet_names
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("excel file '{}' has no worksheets", file_name))?
+        .clone();
+    let range = workbook
+        .worksheet_range(&first_sheet_name)
+        .with_context(|| {
+            format!(
+                "failed to read worksheet '{}' from excel file: {}",
+                first_sheet_name, file_name
+            )
+        })?;
+    // The range starts at the first non-empty cell; Excel numbers rows from 1
+    // and the header takes the first one.
+    let header_row = range
+        .start()
+        .and_then(|(row, _)| usize::try_from(row).ok())
+        .unwrap_or(0);
+    let mut rows_iter = range.rows();
+    let headers: Vec<String> = match rows_iter.next() {
+        Some(header_row) => header_row.iter().map(|cell| cell.to_string()).collect(),
+        None => {
+            return Err(anyhow::anyhow!(
+                "first worksheet '{}' of excel file '{}' has no header row",
+                first_sheet_name,
+                file_name
+            ));
         }
-        Ok(output)
-    }
-
-    fn excel_action_iter(path: &Path) -> anyhow::Result<ExcelActionIterator> {
-        let file_name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown file")
-            .to_string();
-        let mut workbook = open_workbook_auto(path)
-            .with_context(|| format!("failed to open excel file: {}", file_name))?;
-        let sheet_names = workbook.sheet_names().to_owned();
-        let first_sheet_name = sheet_names
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("excel file '{}' has no worksheets", file_name))?
-            .clone();
-        let range = workbook
-            .worksheet_range(&first_sheet_name)
-            .with_context(|| {
-                format!(
-                    "failed to read worksheet '{}' from excel file: {}",
-                    first_sheet_name, file_name
-                )
-            })?;
-        // The range starts at the first non-empty cell; Excel numbers rows from 1
-        // and the header takes the first one.
-        let header_row = range
-            .start()
-            .and_then(|(row, _)| usize::try_from(row).ok())
-            .unwrap_or(0);
-        let mut rows_iter = range.rows();
-        let headers: Vec<String> = match rows_iter.next() {
-            Some(header_row) => header_row.iter().map(|cell| cell.to_string()).collect(),
-            None => {
-                return Err(anyhow::anyhow!(
-                    "first worksheet '{}' of excel file '{}' has no header row",
-                    first_sheet_name,
-                    file_name
-                ));
+    };
+    let rows: Vec<Vec<Data>> = rows_iter
+        .map(|row| {
+            let mut row_vec = row.to_vec();
+            while row_vec.len() < headers.len() {
+                row_vec.push(Data::Empty);
             }
-        };
-        let rows: Vec<Vec<Data>> = rows_iter
-            .map(|row| {
-                let mut row_vec = row.to_vec();
-                while row_vec.len() < headers.len() {
-                    row_vec.push(Data::Empty);
-                }
-                row_vec
-            })
-            .collect();
-        Ok(ExcelActionIterator {
-            rows,
-            headers,
-            file_name,
-            sheet_name: first_sheet_name,
-            row_num: 0,
-            first_data_row: header_row + 2,
+            row_vec
         })
-    }
+        .collect();
+    Ok(Actions {
+        rows,
+        headers,
+        file_name,
+        sheet_name: first_sheet_name,
+        row_num: 0,
+        first_data_row: header_row + 2,
+    })
 }
 
 #[cfg(test)]
@@ -419,8 +412,8 @@ mod tests {
         );
     }
 
-    fn sheet(headers: &[&str], rows: Vec<Vec<Data>>) -> ExcelActionIterator {
-        ExcelActionIterator {
+    fn sheet(headers: &[&str], rows: Vec<Vec<Data>>) -> Actions {
+        Actions {
             rows,
             headers: headers.iter().map(|h| (*h).to_string()).collect(),
             file_name: "book.xlsx".to_string(),

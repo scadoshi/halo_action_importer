@@ -12,9 +12,8 @@ use tracing::{error, info, warn};
 use super::format::{format_duration, format_eta, format_number};
 use crate::domain::importer::setup::Cache;
 use crate::domain::models::action_object::{ActionId, ActionObject};
-use crate::inbound::file::csv::Csv;
-use crate::inbound::file::excel::Excel;
-use crate::inbound::file::{Reader, RowError};
+use crate::inbound::file;
+use crate::inbound::file::RowError;
 use crate::outbound::client::action::{ActionClient, PostError, TICKET_NOT_FOUND};
 
 pub struct FailedAction {
@@ -391,7 +390,7 @@ impl<'a> Run<'a> {
             .map(str::to_lowercase);
         match extension.as_deref() {
             Some("csv") => {
-                let rows = <Reader as Csv>::csv_action_iter(path)?;
+                let rows = file::csv::actions(path)?;
                 let total_rows = rows.total_rows();
                 let source = format!("CSV file '{file_name}'");
                 Ok(self
@@ -399,7 +398,7 @@ impl<'a> Run<'a> {
                     .await)
             }
             Some("xlsx" | "xls") => {
-                let rows = <Reader as Excel>::excel_action_iter(path)?;
+                let rows = file::excel::actions(path)?;
                 let total_rows = rows.total_rows();
                 let source = format!("Excel file '{file_name}', sheet '{}'", rows.sheet_name());
                 Ok(self
