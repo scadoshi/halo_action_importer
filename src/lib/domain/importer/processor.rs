@@ -29,7 +29,8 @@ pub struct ProcessingStats {
 }
 
 struct ProcessConfig<'a> {
-    existing_ids: &'a HashSet<ActionId>,
+    /// Ids already in Halo, from the cache plus every id this run has posted.
+    existing_ids: &'a mut HashSet<ActionId>,
     action_client: Option<&'a ActionClient>,
     sheet_times: &'a mut Vec<f64>,
     file_name: &'a str,
@@ -215,10 +216,20 @@ async fn settle_failed_batch(
     }
 }
 
+/// Records `actions` as imported: their ids count as existing for the rest of
+/// the run and are appended to the cache straight away.
+fn record_imported(cache: &Cache, existing_ids: &mut HashSet<ActionId>, actions: &[ActionObject]) {
+    existing_ids.extend(actions.iter().map(ActionObject::action_id));
+    let ids: Vec<String> = actions.iter().map(|a| a.action_id().to_string()).collect();
+    if let Err(e) = cache.record_imported(&ids) {
+        warn!("Failed to update cache with imported IDs: {}", e);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn process_csv_file(
     file_path: &Path,
-    existing_ids: &HashSet<ActionId>,
+    existing_ids: &mut HashSet<ActionId>,
     action_client: Option<&ActionClient>,
     sheet_times: &mut Vec<f64>,
     file_name: &str,
@@ -291,13 +302,15 @@ pub async fn process_csv_file(
         let action_id = action.action_id();
         let ticket_id = action.ticket_id;
         if config.only_parse {
-            if config.existing_ids.contains(&action_id) {
-                skipped += 1;
-            } else {
+            // Counted as a real run would: a repeated id is skipped.
+            if config.existing_ids.insert(action_id) {
                 imported += 1;
+            } else {
+                skipped += 1;
             }
         } else if config.existing_ids.contains(&action_id)
             || config.missing_tickets.contains(&ticket_id)
+            || batch.iter().any(|queued| queued.action_id() == action_id)
         {
             skipped += 1;
             pending_skips += 1;
@@ -372,11 +385,7 @@ pub async fn process_csv_file(
                                 );
                             }
 
-                            let imported_ids: Vec<String> =
-                                batch.iter().map(|a| a.action_id().to_string()).collect();
-                            if let Err(e) = config.cache.record_imported(&imported_ids) {
-                                warn!("Failed to update cache with imported IDs: {}", e);
-                            }
+                            record_imported(config.cache, config.existing_ids, &batch);
 
                             batch.clear();
                             batch_start = Instant::now();
@@ -396,14 +405,11 @@ pub async fn process_csv_file(
                             let recovered = outcome.imported.len();
                             imported += recovered;
                             if recovered > 0 {
-                                let imported_ids: Vec<String> = outcome
-                                    .imported
-                                    .iter()
-                                    .map(|a| a.action_id().to_string())
-                                    .collect();
-                                if let Err(e) = config.cache.record_imported(&imported_ids) {
-                                    warn!("Failed to update cache: {}", e);
-                                }
+                                record_imported(
+                                    config.cache,
+                                    config.existing_ids,
+                                    &outcome.imported,
+                                );
 
                                 // Track timing for recovered actions
                                 let avg_action_time =
@@ -507,11 +513,7 @@ pub async fn process_csv_file(
                         );
                     }
 
-                    let imported_ids: Vec<String> =
-                        batch.iter().map(|a| a.action_id().to_string()).collect();
-                    if let Err(e) = config.cache.record_imported(&imported_ids) {
-                        warn!("Failed to update cache with imported IDs: {}", e);
-                    }
+                    record_imported(config.cache, config.existing_ids, &batch);
                 }
                 Err(e) => {
                     let outcome = settle_failed_batch(
@@ -525,14 +527,7 @@ pub async fn process_csv_file(
                     let recovered = outcome.imported.len();
                     imported += recovered;
                     if recovered > 0 {
-                        let imported_ids: Vec<String> = outcome
-                            .imported
-                            .iter()
-                            .map(|a| a.action_id().to_string())
-                            .collect();
-                        if let Err(e) = config.cache.record_imported(&imported_ids) {
-                            warn!("Failed to update cache: {}", e);
-                        }
+                        record_imported(config.cache, config.existing_ids, &outcome.imported);
 
                         // Track timing for recovered actions
                         let avg_action_time =
@@ -592,7 +587,7 @@ pub async fn process_csv_file(
 #[allow(clippy::too_many_arguments)]
 pub async fn process_excel_file(
     file_path: &Path,
-    existing_ids: &HashSet<ActionId>,
+    existing_ids: &mut HashSet<ActionId>,
     action_client: Option<&ActionClient>,
     sheet_times: &mut Vec<f64>,
     sheet_number: usize,
@@ -662,13 +657,15 @@ pub async fn process_excel_file(
         let action_id = action.action_id();
         let ticket_id = action.ticket_id;
         if config.only_parse {
-            if config.existing_ids.contains(&action_id) {
-                skipped += 1;
-            } else {
+            // Counted as a real run would: a repeated id is skipped.
+            if config.existing_ids.insert(action_id) {
                 imported += 1;
+            } else {
+                skipped += 1;
             }
         } else if config.existing_ids.contains(&action_id)
             || config.missing_tickets.contains(&ticket_id)
+            || batch.iter().any(|queued| queued.action_id() == action_id)
         {
             skipped += 1;
             pending_skips += 1;
@@ -741,11 +738,7 @@ pub async fn process_excel_file(
                                 );
                             }
 
-                            let imported_ids: Vec<String> =
-                                batch.iter().map(|a| a.action_id().to_string()).collect();
-                            if let Err(e) = config.cache.record_imported(&imported_ids) {
-                                warn!("Failed to update cache with imported IDs: {}", e);
-                            }
+                            record_imported(config.cache, config.existing_ids, &batch);
 
                             batch.clear();
                             batch_start = Instant::now();
@@ -765,14 +758,11 @@ pub async fn process_excel_file(
                             let recovered = outcome.imported.len();
                             imported += recovered;
                             if recovered > 0 {
-                                let imported_ids: Vec<String> = outcome
-                                    .imported
-                                    .iter()
-                                    .map(|a| a.action_id().to_string())
-                                    .collect();
-                                if let Err(e) = config.cache.record_imported(&imported_ids) {
-                                    warn!("Failed to update cache: {}", e);
-                                }
+                                record_imported(
+                                    config.cache,
+                                    config.existing_ids,
+                                    &outcome.imported,
+                                );
 
                                 // Track timing for recovered actions
                                 let avg_action_time =
@@ -875,11 +865,7 @@ pub async fn process_excel_file(
                         );
                     }
 
-                    let imported_ids: Vec<String> =
-                        batch.iter().map(|a| a.action_id().to_string()).collect();
-                    if let Err(e) = config.cache.record_imported(&imported_ids) {
-                        warn!("Failed to update cache with imported IDs: {}", e);
-                    }
+                    record_imported(config.cache, config.existing_ids, &batch);
                 }
                 Err(e) => {
                     let outcome = settle_failed_batch(
@@ -893,14 +879,7 @@ pub async fn process_excel_file(
                     let recovered = outcome.imported.len();
                     imported += recovered;
                     if recovered > 0 {
-                        let imported_ids: Vec<String> = outcome
-                            .imported
-                            .iter()
-                            .map(|a| a.action_id().to_string())
-                            .collect();
-                        if let Err(e) = config.cache.record_imported(&imported_ids) {
-                            warn!("Failed to update cache: {}", e);
-                        }
+                        record_imported(config.cache, config.existing_ids, &outcome.imported);
 
                         // Track timing for recovered actions
                         let avg_action_time =
@@ -1142,12 +1121,22 @@ mod tests {
         files: &[(&str, &str)],
         batch_size: usize,
     ) -> Vec<ProcessingStats> {
+        import_with_cache(server, name, files, batch_size).await.0
+    }
+
+    /// [`import`], also returning what the run wrote to the imported cache.
+    async fn import_with_cache(
+        server: &TestServer,
+        name: &str,
+        files: &[(&str, &str)],
+        batch_size: usize,
+    ) -> (Vec<ProcessingStats>, String) {
         let dir = scratch_dir(name);
         let cache = Cache::new(dir.join("cache"));
         let config = config(server.base_url());
         let auth_client = Arc::new(AuthClient::new(config.clone()).unwrap());
         let client = ActionClient::new(config, auth_client).unwrap();
-        let existing_ids = HashSet::new();
+        let mut existing_ids = HashSet::new();
         let mut sheet_times = Vec::new();
         let mut stats = Vec::new();
         for (number, (file_name, csv)) in files.iter().enumerate() {
@@ -1157,7 +1146,7 @@ mod tests {
                 HUNG,
                 process_csv_file(
                     &path,
-                    &existing_ids,
+                    &mut existing_ids,
                     Some(&client),
                     &mut sheet_times,
                     file_name,
@@ -1173,8 +1162,10 @@ mod tests {
             .unwrap();
             stats.push(file_stats);
         }
+        let cached =
+            std::fs::read_to_string(dir.join("cache").join("imported")).unwrap_or_default();
         std::fs::remove_dir_all(&dir).unwrap();
-        stats
+        (stats, cached)
     }
 
     const HEADER: &str = "ticket_id,actionId,actionwho,note,actiondate\n";
@@ -1308,6 +1299,64 @@ mod tests {
         let stats = import(&server, "proc_401_twice", &[("a.csv", &csv)], 1).await;
 
         assert_eq!(error_types(&stats[0]), [(10, "Authentication error")]);
+    }
+
+    #[tokio::test]
+    async fn an_id_imported_from_one_file_is_skipped_in_a_later_file() {
+        let server = TestServer::start(vec![TOKEN, CREATED]).await;
+        let first = format!("{HEADER}1,10,w,n,\n");
+        let second = format!("{HEADER}1,10,w,n,\n");
+
+        let stats = import(
+            &server,
+            "proc_cross_file",
+            &[("a.csv", &first), ("b.csv", &second)],
+            1,
+        )
+        .await;
+
+        assert_eq!(lines(&server.requests()), [POST_TOKEN, POST_ACTIONS]);
+        assert_eq!((stats[1].imported, stats[1].skipped), (0, 1));
+        assert!(stats[1].failed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_id_twice_in_one_file_is_posted_once() {
+        for batch_size in [1, 2] {
+            let server = TestServer::start(vec![TOKEN, CREATED]).await;
+            let csv = format!("{HEADER}1,10,w,n,\n1,10,w,n,\n");
+
+            let stats = import(&server, "proc_same_file", &[("a.csv", &csv)], batch_size).await;
+
+            let requests = server.requests();
+            assert_eq!(
+                lines(&requests),
+                [POST_TOKEN, POST_ACTIONS],
+                "batch {batch_size}"
+            );
+            assert_eq!(
+                requests[1].body.matches(r#""cfactionid":10"#).count(),
+                1,
+                "batch {batch_size}"
+            );
+            assert_eq!(
+                (stats[0].imported, stats[0].skipped),
+                (1, 1),
+                "batch {batch_size}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn each_successful_post_is_appended_to_the_cache() {
+        let server = TestServer::start(vec![TOKEN, CREATED, Reply::Json(500, "{}"), CREATED]).await;
+        let csv = format!("{HEADER}1,10,w,n,\n1,11,w,n,\n1,12,w,n,\n");
+
+        let (stats, cached) =
+            import_with_cache(&server, "proc_cache_append", &[("a.csv", &csv)], 1).await;
+
+        assert_eq!(cached, "10\n12\n");
+        assert_eq!(error_types(&stats[0]), [(11, "Server error")]);
     }
 
     #[test]

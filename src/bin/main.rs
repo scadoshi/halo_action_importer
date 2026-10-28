@@ -30,7 +30,7 @@ async fn main() -> anyhow::Result<ExitCode> {
     let cache = Cache::default();
 
     let SetupResult {
-        existing_ids,
+        mut existing_ids,
         action_client,
         files_to_process,
         auth_client: _,
@@ -79,7 +79,7 @@ async fn main() -> anyhow::Result<ExitCode> {
             let result = if ext_lower == "csv" {
                 process_csv_file(
                     file_path,
-                    &existing_ids,
+                    &mut existing_ids,
                     action_client.as_ref(),
                     &mut sheet_times,
                     file_name,
@@ -93,7 +93,7 @@ async fn main() -> anyhow::Result<ExitCode> {
             } else if ext_lower == "xlsx" || ext_lower == "xls" {
                 process_excel_file(
                     file_path,
-                    &existing_ids,
+                    &mut existing_ids,
                     action_client.as_ref(),
                     &mut sheet_times,
                     sheet_number,
