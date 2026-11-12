@@ -91,7 +91,6 @@ pub struct ActionObject {
         alias = "cfActionId",
         alias = "CFactionId",
         alias = "CFActionID",
-        alias = "CFactionId",
         alias = "cfactionId",
         alias = "cfActionID",
         alias = "cfactionID",

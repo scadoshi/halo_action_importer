@@ -659,8 +659,7 @@ pub fn write_retry_csv<'a>(
         // The date stays Arizona time, as the input files have it.
         let date_str = action
             .actiondate
-            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-            .unwrap_or_default();
+            .map_or_default(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string());
 
         let ticket_id = action.ticket_id.to_string();
         let action_id = action.action_id().to_string();

@@ -174,8 +174,7 @@ impl Cache {
         let position = resources.iter().position(|r| r.resource_id == resource_id);
         let existing = position
             .and_then(|index| resources.get_mut(index))
-            .map(|r| std::mem::take(&mut r.action_ids))
-            .unwrap_or_default();
+            .map_or_default(|r| std::mem::take(&mut r.action_ids));
         let mut numeric: BTreeSet<ActionId> = action_ids.iter().copied().collect();
         let mut other: Vec<String> = Vec::new();
         for id in existing {
